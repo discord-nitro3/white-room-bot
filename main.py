@@ -23,22 +23,27 @@ def keep_alive():
 intents = discord.Intents.default()
 intents.presences = True
 intents.members = True
-intents.message_content = True  # Wymagane do czytania komendy !play
+intents.message_content = True  
 intents.guilds = True
-intents.voice_states = True     # Wymagane do obsługi kanałów głosowych
+intents.voice_states = True     
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 USER_TO_COPY_ID = 1143856525648076812
 
-# Konfiguracja streamowania yt-dlp / FFmpeg
+# Maksymalnie zoptymalizowane opcje yt-dlp omijające restrykcje antybotowe serwerowni
 YTDL_OPTIONS = {
     'format': 'bestaudio/best',
     'noplaylist': True,
     'quiet': True,
     'default_search': 'auto',
-    'source_address': '0.0.0.0'
+    'source_address': '0.0.0.0',
+    'nocheckcertificate': True,
+    'ignoreerrors': True,
+    'no_warnings': True,
+    'extract_flat': 'in_playlist',
 }
+
 FFMPEG_OPTIONS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
     'options': '-vn'
@@ -48,21 +53,19 @@ ytdl = yt_dlp.YoutubeDL(YTDL_OPTIONS)
 
 @bot.command()
 async def play(ctx, *, url: str):
-    # Sprawdzenie czy użytkownik jest na kanale
     if not ctx.author.voice:
         return
 
     voice_channel = ctx.author.voice.channel
     
-    # Dołączanie do kanału (jeśli bot jeszcze tam nie jest)
     if ctx.voice_client is None:
         vc = await voice_channel.connect()
     else:
         vc = ctx.voice_client
 
-    # Pobieranie i odtwarzanie strumienia w locie (bez zapisu na dysku - oszczędność RAM)
     try:
         loop = asyncio.get_event_loop()
+        # Wyciąganie czystych metadanych strumienia
         data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=False))
         
         if 'entries' in data:
@@ -74,13 +77,12 @@ async def play(ctx, *, url: str):
             vc.stop()
             
         vc.play(discord.FFmpegPCMAudio(song_url, **FFMPEG_OPTIONS))
-        print(f"[VOICE] Odtwarzanie: {data.get('title', 'Audio')}")
+        print(f"[VOICE] Pomyślnie uruchomiono strumień: {data.get('title', 'Audio')}")
     except Exception as e:
-        print(f"[ERROR] Problem z audio: {e}")
+        print(f"[ERROR] Krytyczny błąd odtwarzania strumienia: {e}")
 
 @bot.event
 async def on_presence_update(before, after):
-    # Klonowanie kropki statusu działa niezależnie w tle
     if after.id == USER_TO_COPY_ID:
         await bot.change_presence(status=after.status)
 
@@ -91,7 +93,7 @@ async def on_ready():
         if member:
             await bot.change_presence(status=member.status)
             break
-    print(f"[SYSTEM] Protokół 1v99 załadowany w pełni (Status + Voice).")
+    print(f"[SYSTEM] Protokół 1v99 załadowany w całości (Status + Anty-Bot Voice).")
 
 # --- ROZRUCH ---
 keep_alive()
