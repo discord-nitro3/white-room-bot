@@ -1,14 +1,17 @@
 import os
+import asyncio
 from flask import Flask
 from threading import Thread
 import discord
+from discord.ext import commands
+import yt_dlp
 
 # --- SUROWY SERWER FLASK ---
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "Status Sync: Active"
+    return "Status & Voice Sync: Active"
 
 def run():
     app.run(host='0.0.0.0', port=8080)
@@ -16,16 +19,68 @@ def run():
 def keep_alive():
     Thread(target=run).start()
 
-# --- REPLIKATOR STATUSU (1v99) ---
+# --- REPLIKATOR & OBSŁUGA AUDIO (1v99) ---
 intents = discord.Intents.default()
 intents.presences = True
 intents.members = True
-bot = discord.Client(intents=intents)
+intents.message_content = True  # Wymagane do czytania komendy !play
+intents.guilds = True
+intents.voice_states = True     # Wymagane do obsługi kanałów głosowych
+
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 USER_TO_COPY_ID = 1143856525648076812
 
+# Konfiguracja streamowania yt-dlp / FFmpeg
+YTDL_OPTIONS = {
+    'format': 'bestaudio/best',
+    'noplaylist': True,
+    'quiet': True,
+    'default_search': 'auto',
+    'source_address': '0.0.0.0'
+}
+FFMPEG_OPTIONS = {
+    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+    'options': '-vn'
+}
+
+ytdl = yt_dlp.YoutubeDL(YTDL_OPTIONS)
+
+@bot.command()
+async def play(ctx, *, url: str):
+    # Sprawdzenie czy użytkownik jest na kanale
+    if not ctx.author.voice:
+        return
+
+    voice_channel = ctx.author.voice.channel
+    
+    # Dołączanie do kanału (jeśli bot jeszcze tam nie jest)
+    if ctx.voice_client is None:
+        vc = await voice_channel.connect()
+    else:
+        vc = ctx.voice_client
+
+    # Pobieranie i odtwarzanie strumienia w locie (bez zapisu na dysku - oszczędność RAM)
+    try:
+        loop = asyncio.get_event_loop()
+        data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=False))
+        
+        if 'entries' in data:
+            data = data['entries'][0]
+            
+        song_url = data['url']
+        
+        if vc.is_playing():
+            vc.stop()
+            
+        vc.play(discord.FFmpegPCMAudio(song_url, **FFMPEG_OPTIONS))
+        print(f"[VOICE] Odtwarzanie: {data.get('title', 'Audio')}")
+    except Exception as e:
+        print(f"[ERROR] Problem z audio: {e}")
+
 @bot.event
 async def on_presence_update(before, after):
+    # Klonowanie kropki statusu działa niezależnie w tle
     if after.id == USER_TO_COPY_ID:
         await bot.change_presence(status=after.status)
 
@@ -36,7 +91,7 @@ async def on_ready():
         if member:
             await bot.change_presence(status=member.status)
             break
-    print(f"[SYSTEM] Replikacja statusu aktywna dla {bot.user}")
+    print(f"[SYSTEM] Protokół 1v99 załadowany w pełni (Status + Voice).")
 
 # --- ROZRUCH ---
 keep_alive()
