@@ -11,7 +11,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "SoundCloud & Audio Sync: Active"
+    return "Status Playing Sync: Active"
 
 def run():
     app.run(host='0.0.0.0', port=8080)
@@ -19,7 +19,7 @@ def run():
 def keep_alive():
     Thread(target=run).start()
 
-# --- REPLIKATOR & SILNIK AUDIO (1v99) ---
+# --- REPLIKATOR & SILNIK AUDIO + GRA W STATUS (1v99) ---
 intents = discord.Intents.default()
 intents.presences = True
 intents.members = True
@@ -31,12 +31,10 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 USER_TO_COPY_ID = 1143856525648076812
 
-# CHŁODNA KONFIGURACJA OMIJAJĄCA YOUTUBE (WYMUSZAMY SOUNDCLOUD / BEZPOŚREDNIE LINKI)
 YTDL_OPTIONS = {
     'format': 'bestaudio/best',
     'noplaylist': True,
     'quiet': True,
-    # Jeśli podasz sam tekst, bot wyszuka go na SoundCloud zamiast na YouTube
     'default_search': 'scsearch', 
     'nocheckcertificate': True,
     'ignoreerrors': True,
@@ -50,6 +48,19 @@ FFMPEG_OPTIONS = {
 
 ytdl = yt_dlp.YoutubeDL(YTDL_OPTIONS)
 music_queues = {}
+current_user_status = discord.Status.online
+
+async def update_bot_presence(track_title=None):
+    """Aktualizuje status bota zachowując kropkę i ustawiając czysty tekst 'Playing: utwór'"""
+    global current_user_status
+    
+    if track_title:
+        # Ustawienie aktywności "Gra w" z dokładnie takim formatem
+        activity = discord.Game(name=f"Playing: {track_title}")
+    else:
+        activity = None
+
+    await bot.change_presence(status=current_user_status, activity=activity)
 
 def check_queue(ctx):
     guild_id = ctx.guild.id
@@ -62,8 +73,10 @@ def check_queue(ctx):
             discord.FFmpegPCMAudio(next_track['url'], **FFMPEG_OPTIONS), 
             after=lambda e: check_queue(ctx)
         )
+        bot.loop.create_task(update_bot_presence(next_track['title']))
         bot.loop.create_task(ctx.send(f"playing {next_track['title']} // FROM QUEUE"))
     else:
+        bot.loop.create_task(update_bot_presence(None))
         print(f"[VOICE] Kolejka pusta na serwerze {guild_id}")
 
 @bot.command()
@@ -82,16 +95,14 @@ async def play(ctx, *, search: str):
     if guild_id not in music_queues:
         music_queues[guild_id] = []
 
-    # Blokada bezpośrednich linków do YouTube, żeby nie triggerować błędów
     if "youtube.com" in search or "youtu.be" in search:
-        await ctx.send("system error // YOUTUBE IS BLOCKING THIS SERVER. USE SOUNDCLOUD LINKS OR TEXT SEARCH.")
+        await ctx.send("system error // YOUTUBE IS BLOCKING THIS SERVER. USE SOUNDCLOUD.")
         return
 
     await ctx.send("searching...")
 
     try:
         loop = asyncio.get_event_loop()
-        # Wyciąganie danych z pominięciem YouTube
         data = await loop.run_in_executor(None, lambda: ytdl.extract_info(search, download=False))
         
         if 'entries' in data and data['entries']:
@@ -114,6 +125,8 @@ async def play(ctx, *, search: str):
                 discord.FFmpegPCMAudio(track_info['url'], **FFMPEG_OPTIONS), 
                 after=lambda e: check_queue(ctx)
             )
+            # Wstrzyknięcie czystego statusu od razu po odpaleniu piosenki
+            await update_bot_presence(track_info['title'])
             await ctx.send(f"playing {track_info['title']}")
             
     except Exception as e:
@@ -135,21 +148,37 @@ async def clear(ctx):
     vc = ctx.voice_client
     if vc:
         await vc.disconnect()
-        await ctx.send("queue cleared // SYSTEM ROZŁĄCZONY")
+    await update_bot_presence(None)
+    await ctx.send("queue cleared // SYSTEM ROZŁĄCZONY")
 
 @bot.event
 async def on_presence_update(before, after):
+    global current_user_status
     if after.id == USER_TO_COPY_ID:
-        await bot.change_presence(status=after.status)
+        current_user_status = after.status
+        
+        vc = None
+        for guild in bot.guilds:
+            if guild.voice_client:
+                vc = guild.voice_client
+                break
+                
+        # Pilnowanie, żeby aktualizacja kropki nie zresetowała statusu muzycznego w trakcie gry
+        if vc and vc.is_playing() and bot.activity:
+            await bot.change_presence(status=current_user_status, activity=bot.activity)
+        else:
+            await bot.change_presence(status=current_user_status, activity=None)
 
 @bot.event
 async def on_ready():
+    global current_user_status
     for guild in bot.guilds:
         member = guild.get_member(USER_TO_COPY_ID)
         if member:
-            await bot.change_presence(status=member.status)
+            current_user_status = member.status
+            await bot.change_presence(status=current_user_status)
             break
-    print(f"[SYSTEM] Protokół 1v99 aktywny. Silnik SoundCloud załadowany.")
+    print(f"[SYSTEM] Protokół 1v99 zsynchronizowany. Format: Playing: utwór.")
 
 # --- ROZRUCH ---
 keep_alive()
