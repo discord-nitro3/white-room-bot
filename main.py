@@ -3,6 +3,7 @@ import discord
 from discord.ext import commands
 from flask import Flask
 from threading import Thread
+import yt_dlp
 import asyncio
 
 # --- SUROWY SERWER FLASK ---
@@ -10,7 +11,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "MP3 Queue Sync: Active"
+    return "SoundCloud & Audio Sync: Active"
 
 def run():
     app.run(host='0.0.0.0', port=8080)
@@ -18,7 +19,7 @@ def run():
 def keep_alive():
     Thread(target=run).start()
 
-# --- REPLIKATOR & KOLEJKA MP3 (1v99) ---
+# --- REPLIKATOR & SILNIK AUDIO (1v99) ---
 intents = discord.Intents.default()
 intents.presences = True
 intents.members = True
@@ -30,46 +31,44 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 USER_TO_COPY_ID = 1143856525648076812
 
+# CHŁODNA KONFIGURACJA OMIJAJĄCA YOUTUBE (WYMUSZAMY SOUNDCLOUD / BEZPOŚREDNIE LINKI)
+YTDL_OPTIONS = {
+    'format': 'bestaudio/best',
+    'noplaylist': True,
+    'quiet': True,
+    # Jeśli podasz sam tekst, bot wyszuka go na SoundCloud zamiast na YouTube
+    'default_search': 'scsearch', 
+    'nocheckcertificate': True,
+    'ignoreerrors': True,
+    'no_warnings': True,
+}
+
 FFMPEG_OPTIONS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
     'options': '-vn'
 }
 
-# Słownik do przechowywania kolejek dla różnych serwerów
+ytdl = yt_dlp.YoutubeDL(YTDL_OPTIONS)
 music_queues = {}
 
 def check_queue(ctx):
-    """Funkcja wywoływana automatycznie po zakończeniu utworu"""
     guild_id = ctx.guild.id
     vc = ctx.voice_client
 
     if guild_id in music_queues and music_queues[guild_id]:
-        # Pobieramy następny utwór z kolejki
-        next_attachment = music_queues[guild_id].pop(0)
+        next_track = music_queues[guild_id].pop(0)
         
         vc.play(
-            discord.FFmpegPCMAudio(next_attachment.url, **FFMPEG_OPTIONS), 
+            discord.FFmpegPCMAudio(next_track['url'], **FFMPEG_OPTIONS), 
             after=lambda e: check_queue(ctx)
         )
-        # Wysłanie powiadomienia o automatycznym przejściu dalej
-        bot.loop.create_task(ctx.send(f"playing {next_attachment.filename} // FROM QUEUE"))
+        bot.loop.create_task(ctx.send(f"playing {next_track['title']} // FROM QUEUE"))
     else:
-        # Jeśli kolejka jest pusta, bot czeka na kanale w ciszy
         print(f"[VOICE] Kolejka pusta na serwerze {guild_id}")
 
 @bot.command()
-async def play(ctx):
+async def play(ctx, *, search: str):
     if not ctx.author.voice:
-        return
-
-    if not ctx.message.attachments:
-        await ctx.send("playing nothing // BRAK PLIKU MP3")
-        return
-
-    attachment = ctx.message.attachments[0]
-    
-    if not attachment.content_type or not attachment.content_type.startswith('audio/'):
-        await ctx.send("playing nothing // TO NIE JEST PLIK AUDIO")
         return
 
     voice_channel = ctx.author.voice.channel
@@ -83,48 +82,63 @@ async def play(ctx):
     if guild_id not in music_queues:
         music_queues[guild_id] = []
 
-    # Jeśli bot aktualnie coś odtwarza, dodaj plik do kolejki
-    if vc.is_playing():
-        music_queues[guild_id].append(attachment)
-        await ctx.send(f"added to queue // {attachment.filename}")
-        print(f"[VOICE] Dodano do kolejki: {attachment.filename}")
-    else:
-        # Jeśli nic nie gra, odpal od razu
-        try:
+    # Blokada bezpośrednich linków do YouTube, żeby nie triggerować błędów
+    if "youtube.com" in search or "youtu.be" in search:
+        await ctx.send("system error // YOUTUBE IS BLOCKING THIS SERVER. USE SOUNDCLOUD LINKS OR TEXT SEARCH.")
+        return
+
+    await ctx.send("searching...")
+
+    try:
+        loop = asyncio.get_event_loop()
+        # Wyciąganie danych z pominięciem YouTube
+        data = await loop.run_in_executor(None, lambda: ytdl.extract_info(search, download=False))
+        
+        if 'entries' in data and data['entries']:
+            data = data['entries'][0]
+            
+        if not data:
+            await ctx.send("playing nothing // NO AUDIO FOUND")
+            return
+
+        track_info = {
+            'url': data['url'],
+            'title': data.get('title', 'Unknown Track')
+        }
+
+        if vc.is_playing():
+            music_queues[guild_id].append(track_info)
+            await ctx.send(f"added to queue // {track_info['title']}")
+        else:
             vc.play(
-                discord.FFmpegPCMAudio(attachment.url, **FFMPEG_OPTIONS), 
+                discord.FFmpegPCMAudio(track_info['url'], **FFMPEG_OPTIONS), 
                 after=lambda e: check_queue(ctx)
             )
-            await ctx.send(f"playing {attachment.filename}")
-            print(f"[VOICE] Odtwarzanie: {attachment.filename}")
-        except Exception as e:
-            print(f"[ERROR] Błąd odtwarzania MP3: {e}")
+            await ctx.send(f"playing {track_info['title']}")
+            
+    except Exception as e:
+        print(f"[ERROR] Audio engine error: {e}")
+        await ctx.send("system error // CANNOT STREAM THIS SOURCE")
 
 @bot.command()
 async def skip(ctx):
-    """Pomiń aktualny utwór"""
     vc = ctx.voice_client
     if vc and vc.is_playing():
-        vc.stop()  # Wywołanie .stop() automatycznie uruchomi funkcję check_queue (after=)
+        vc.stop()
         await ctx.send("skipped // POMINIĘTO UTWÓR")
-        print("[VOICE] Ręczne pominięcie utworu.")
 
 @bot.command()
 async def clear(ctx):
-    """Wyczyść kolejkę i rozłącz bota"""
     guild_id = ctx.guild.id
     if guild_id in music_queues:
         music_queues[guild_id].clear()
-    
     vc = ctx.voice_client
     if vc:
         await vc.disconnect()
         await ctx.send("queue cleared // SYSTEM ROZŁĄCZONY")
-        print("[VOICE] Kolejka wyczyszczona, bot opuścił kanał.")
 
 @bot.event
 async def on_presence_update(before, after):
-    # Klonowanie statusu kropki działa niezależnie w tle
     if after.id == USER_TO_COPY_ID:
         await bot.change_presence(status=after.status)
 
@@ -135,7 +149,7 @@ async def on_ready():
         if member:
             await bot.change_presence(status=member.status)
             break
-    print(f"[SYSTEM] Protokół 1v99 załadowany. Replikacja + System Kolejkowania aktywny.")
+    print(f"[SYSTEM] Protokół 1v99 aktywny. Silnik SoundCloud załadowany.")
 
 # --- ROZRUCH ---
 keep_alive()
