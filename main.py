@@ -1,17 +1,18 @@
 import os
 import discord
 from discord.ext import commands
+from discord.ui import Button, View
 from flask import Flask
 from threading import Thread
 import yt_dlp
 import asyncio
 
-# --- SUROWY SERWER FLASK ---
+# --- SERWER FLASK ---
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "Status Playing Sync: Active"
+    return "1v99 Ultra Sync: Active"
 
 def run():
     app.run(host='0.0.0.0', port=8080)
@@ -19,7 +20,7 @@ def run():
 def keep_alive():
     Thread(target=run).start()
 
-# --- REPLIKATOR & SILNIK AUDIO + GRA W STATUS (1v99) ---
+# --- REPLIKATOR & SILNIK AUDIO PRO (1v99) ---
 intents = discord.Intents.default()
 intents.presences = True
 intents.members = True
@@ -51,16 +52,62 @@ music_queues = {}
 current_user_status = discord.Status.online
 
 async def update_bot_presence(track_title=None):
-    """Aktualizuje status bota zachowując kropkę i ustawiając czysty tekst 'Playing: utwór'"""
+    """Aktualizuje status bota zachowując kropkę i tekst Playing: utwór"""
     global current_user_status
-    
-    if track_title:
-        # Ustawienie aktywności "Gra w" z dokładnie takim formatem
-        activity = discord.Game(name=f"Playing: {track_title}")
-    else:
-        activity = None
-
+    activity = discord.Game(name=f"Playing: {track_title}") if track_title else None
     await bot.change_presence(status=current_user_status, activity=activity)
+
+def format_duration(seconds):
+    """Formatowanie sekund do postaci MM:SS"""
+    if not seconds:
+        return "Live Stream"
+    minutes = seconds // 60
+    seconds = seconds % 60
+    return f"{minutes:02d}:{seconds:02d}"
+
+def create_music_embed(track_info, status="Now Playing"):
+    """Tworzy profesjonalny, czarny Embed z informacjami o utworze"""
+    embed = discord.Embed(
+        title=track_info['title'],
+        url=track_info['original_url'],
+        color=0x000000
+    )
+    embed.set_author(name=status, icon_url=bot.user.avatar.url if bot.user.avatar else None)
+    embed.add_field(name="Uploader", value=track_info['uploader'], inline=True)
+    embed.add_field(name="Duration", value=format_duration(track_info['duration']), inline=True)
+    embed.add_field(name="Source", value=track_info['extractor'], inline=True)
+    
+    if track_info['thumbnail']:
+        embed.set_thumbnail(url=track_info['thumbnail'])
+        
+    embed.set_footer(text="1v99 Audio Core Integration", icon_url=bot.user.avatar.url if bot.user.avatar else None)
+    return embed
+
+# --- INTERAKTYWNE PRZYCISKI (VIEW) ---
+class MusicControlView(discord.ui.View):
+    def __init__(self, ctx):
+        super().__init__(timeout=None) # Przyciski nie wygasają
+        self.ctx = ctx
+
+    @discord.ui.button(label="Skip ⏭️", style=discord.ButtonStyle.secondary, custom_id="btn_skip")
+    async def skip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        vc = self.ctx.voice_client
+        if vc and vc.is_playing():
+            vc.stop()
+            await interaction.response.send_message("Track skipped via control panel.", ephemeral=True)
+        else:
+            await interaction.response.send_message("Nothing is playing right now.", ephemeral=True)
+
+    @discord.ui.button(label="Stop & Clear ⏹️", style=discord.ButtonStyle.danger, custom_id="btn_clear")
+    async def clear_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        guild_id = self.ctx.guild.id
+        if guild_id in music_queues:
+            music_queues[guild_id].clear()
+        vc = self.ctx.voice_client
+        if vc:
+            await vc.disconnect()
+        await update_bot_presence(None)
+        await interaction.response.send_message("Queue cleared and disconnected via control panel.", ephemeral=True)
 
 def check_queue(ctx):
     guild_id = ctx.guild.id
@@ -74,32 +121,32 @@ def check_queue(ctx):
             after=lambda e: check_queue(ctx)
         )
         bot.loop.create_task(update_bot_presence(next_track['title']))
-        bot.loop.create_task(ctx.send(f"playing {next_track['title']} // FROM QUEUE"))
+        
+        embed = create_music_embed(next_track, status="Now Playing")
+        view = MusicControlView(ctx)
+        bot.loop.create_task(ctx.send(embed=embed, view=view))
     else:
         bot.loop.create_task(update_bot_presence(None))
-        print(f"[VOICE] Kolejka pusta na serwerze {guild_id}")
+        print(f"[VOICE] Queue concluded for guild {guild_id}")
 
 @bot.command()
 async def play(ctx, *, search: str):
     if not ctx.author.voice:
         return
 
+    # Blokada YouTube dla stabilności serwerowni
+    if "youtube.com" in search or "youtu.be" in search:
+        await ctx.send("`[SYSTEM ERROR]` YouTube extraction is restricted on this node. Use SoundCloud or text queries.")
+        return
+
     voice_channel = ctx.author.voice.channel
-    
-    if ctx.voice_client is None:
-        vc = await voice_channel.connect()
-    else:
-        vc = ctx.voice_client
+    vc = ctx.voice_client if ctx.voice_client else await voice_channel.connect()
 
     guild_id = ctx.guild.id
     if guild_id not in music_queues:
         music_queues[guild_id] = []
 
-    if "youtube.com" in search or "youtu.be" in search:
-        await ctx.send("system error // YOUTUBE IS BLOCKING THIS SERVER. USE SOUNDCLOUD.")
-        return
-
-    await ctx.send("searching...")
+    status_msg = await ctx.send("`[SYSTEM]` Fetching audio metadata...")
 
     try:
         loop = asyncio.get_event_loop()
@@ -109,39 +156,61 @@ async def play(ctx, *, search: str):
             data = data['entries'][0]
             
         if not data:
-            await ctx.send("playing nothing // NO AUDIO FOUND")
+            await status_msg.edit(content="`[ERROR]` Requested track could not be resolved.")
             return
 
         track_info = {
             'url': data['url'],
-            'title': data.get('title', 'Unknown Track')
+            'original_url': data.get('webpage_url', 'https://soundcloud.com'),
+            'title': data.get('title', 'Unknown Track'),
+            'uploader': data.get('uploader', 'Unknown Artist'),
+            'duration': data.get('duration', 0),
+            'thumbnail': data.get('thumbnail', None),
+            'extractor': data.get('extractor_key', 'SoundCloud')
         }
 
         if vc.is_playing():
             music_queues[guild_id].append(track_info)
-            await ctx.send(f"added to queue // {track_info['title']}")
+            embed = create_music_embed(track_info, status="Track Enqueued")
+            await status_msg.delete()
+            await ctx.send(embed=embed)
         else:
             vc.play(
                 discord.FFmpegPCMAudio(track_info['url'], **FFMPEG_OPTIONS), 
                 after=lambda e: check_queue(ctx)
             )
-            # Wstrzyknięcie czystego statusu od razu po odpaleniu piosenki
             await update_bot_presence(track_info['title'])
-            await ctx.send(f"playing {track_info['title']}")
+            
+            embed = create_music_embed(track_info, status="Now Playing")
+            view = MusicControlView(ctx)
+            await status_msg.delete()
+            await ctx.send(embed=embed, view=view)
             
     except Exception as e:
-        print(f"[ERROR] Audio engine error: {e}")
-        await ctx.send("system error // CANNOT STREAM THIS SOURCE")
+        print(f"[ERROR] Audio exception: {e}")
+        await status_msg.edit(content="`[CRITICAL]` Failed to initialize streaming audio source.")
+
+@bot.command(name="queue", aliases=["q"])
+async def show_queue(ctx):
+    """Wyświetla aktualną kolejkę w profesjonalnym bloku kodu"""
+    guild_id = ctx.guild.id
+    if guild_id in music_queues and music_queues[guild_id]:
+        tracks = "\n".join([f"[{i+1:02d}] {track['title']} ({format_duration(track['duration'])})" for i, track in enumerate(music_queues[guild_id])])
+        await ctx.send(f"```ini\n[1v99 SYSTEM PENDING QUEUE]\n{tracks}\n```")
+    else:
+        await ctx.send("`[SYSTEM]` The audio queue is currently vacant.")
 
 @bot.command()
 async def skip(ctx):
+    """Pomiń utwór komendą tekstową"""
     vc = ctx.voice_client
     if vc and vc.is_playing():
         vc.stop()
-        await ctx.send("skipped // POMINIĘTO UTWÓR")
+        await ctx.send("`[SYSTEM]` Current track terminated manually.")
 
 @bot.command()
 async def clear(ctx):
+    """Wyczyść kolejkę komendą tekstową"""
     guild_id = ctx.guild.id
     if guild_id in music_queues:
         music_queues[guild_id].clear()
@@ -149,8 +218,37 @@ async def clear(ctx):
     if vc:
         await vc.disconnect()
     await update_bot_presence(None)
-    await ctx.send("queue cleared // SYSTEM ROZŁĄCZONY")
+    await ctx.send("`[SYSTEM]` Queue wiped. Voice matrix decoupled.")
 
+@bot.command()
+async def status(ctx):
+    """Raport integralności bota i replikacji"""
+    member = ctx.guild.get_member(USER_TO_COPY_ID)
+    user_dot = member.status if member else "unresolved"
+    await ctx.send(
+        f"```yaml\n"
+        f"1v99 // CORE INTEGRITY REPORT\n"
+        f"-----------------------------\n"
+        f"Latency: {round(bot.latency * 1000)}ms\n"
+        f"Target Presence: {user_dot}\n"
+        f"Matrix Status: Operational\n"
+        f"```"
+    )
+
+# --- SYSTEM AUTOMATYCZNEGO OPUSZCZANIA VC ---
+@bot.event
+async def on_voice_state_update(member, before, after):
+    if member.guild.voice_client:
+        bot_vc = member.guild.voice_client.channel
+        if len(bot_vc.members) == 1: # Bot został całkiem sam
+            await member.guild.voice_client.disconnect()
+            guild_id = member.guild.id
+            if guild_id in music_queues:
+                music_queues[guild_id].clear()
+            await update_bot_presence(None)
+            print(f"[VOICE] Channel auto-vacated in guild {guild_id} due to inactivity.")
+
+# --- OBSŁUGA REPLIKACJI KROPKI ---
 @bot.event
 async def on_presence_update(before, after):
     global current_user_status
@@ -163,7 +261,6 @@ async def on_presence_update(before, after):
                 vc = guild.voice_client
                 break
                 
-        # Pilnowanie, żeby aktualizacja kropki nie zresetowała statusu muzycznego w trakcie gry
         if vc and vc.is_playing() and bot.activity:
             await bot.change_presence(status=current_user_status, activity=bot.activity)
         else:
@@ -178,7 +275,7 @@ async def on_ready():
             current_user_status = member.status
             await bot.change_presence(status=current_user_status)
             break
-    print(f"[SYSTEM] Protokół 1v99 zsynchronizowany. Format: Playing: utwór.")
+    print(f"[SYSTEM] 1v99 Advanced Engine deployed successfully.")
 
 # --- ROZRUCH ---
 keep_alive()
