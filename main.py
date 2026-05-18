@@ -28,11 +28,11 @@ intents.message_content = True
 intents.guilds = True
 intents.voice_states = True     
 
-# Dodanie obsługi pingu jako alternatywnego prefixu bota
 bot = commands.Bot(command_prefix=commands.when_mentioned_or("!"), intents=intents, help_command=None)
 
 USER_TO_COPY_ID = 1143856525648076812
 
+# Maksymalnie wygładzone opcje wyszukiwania i ignorowania błędów API
 YTDL_OPTIONS = {
     'format': 'bestaudio/best',
     'noplaylist': True,
@@ -114,18 +114,21 @@ def check_queue(ctx):
     if guild_id in music_queues and music_queues[guild_id]:
         next_track = music_queues[guild_id].pop(0)
         
-        vc.play(
-            discord.FFmpegPCMAudio(next_track['url'], **FFMPEG_OPTIONS), 
-            after=lambda e: check_queue(ctx)
-        )
-        bot.loop.create_task(update_bot_presence(next_track['title']))
-        
-        embed = create_music_embed(next_track, status="Now Playing")
-        view = MusicControlView(ctx)
-        bot.loop.create_task(ctx.send(embed=embed, view=view))
+        try:
+            vc.play(
+                discord.FFmpegPCMAudio(next_track['url'], **FFMPEG_OPTIONS), 
+                after=lambda e: check_queue(ctx)
+            )
+            bot.loop.create_task(update_bot_presence(next_track['title']))
+            
+            embed = create_music_embed(next_track, status="Now Playing")
+            view = MusicControlView(ctx)
+            bot.loop.create_task(ctx.send(embed=embed, view=view))
+        except Exception:
+            # Jeśli utwór z kolejki rzuci błędem sieciowym, po prostu chłodno przechodzimy do następnego
+            check_queue(ctx)
     else:
         bot.loop.create_task(update_bot_presence(None))
-        print(f"[VOICE] Queue concluded for guild {guild_id}")
 
 # --- COMMANDS SECTION ---
 @bot.command()
@@ -144,7 +147,7 @@ async def play(ctx, *, search: str):
     if guild_id not in music_queues:
         music_queues[guild_id] = []
 
-    status_msg = await ctx.send("`[SYSTEM]` Fetching track metadata...")
+    status_msg = await ctx.send("`[SYSTEM]` Searching track...")
 
     try:
         loop = asyncio.get_event_loop()
@@ -153,8 +156,8 @@ async def play(ctx, *, search: str):
         if 'entries' in data and data['entries']:
             data = data['entries'][0]
             
-        if not data:
-            await status_msg.edit(content="`[ERROR]` Target track unresolved.")
+        if not data or 'url' not in data:
+            await status_msg.edit(content="`[ERROR]` Track could not be resolved. Retrying another query is advised.")
             return
 
         track_info = {
@@ -184,9 +187,8 @@ async def play(ctx, *, search: str):
             await status_msg.delete()
             await ctx.send(embed=embed, view=view)
             
-    except Exception as e:
-        print(f"[ERROR] Stream exception: {e}")
-        await status_msg.edit(content="`[CRITICAL]` Streaming subsystem failed.")
+    except Exception:
+        await status_msg.edit(content="`[ERROR]` Link resolution failed. Please try a different track title.")
 
 @bot.command(name="queue", aliases=["q"])
 async def show_queue(ctx):
@@ -231,7 +233,6 @@ async def status(ctx):
 
 @bot.command(name="help", aliases=["h"])
 async def pro_help(ctx):
-    """Zaawansowana, szczegółowa komenda pomocy w surowym stylu"""
     embed = discord.Embed(
         title="1v99 SYSTEM COMMAND MANIFEST",
         description="All commands can be invoked using either the `!` prefix or by directly mentioning the bot (@1v99).",
@@ -258,15 +259,13 @@ async def on_voice_state_update(member, before, after):
             if guild_id in music_queues:
                 music_queues[guild_id].clear()
             await update_bot_presence(None)
-            print(f"[VOICE] Auto-vacated due to lack of users.")
 
-# --- APERIODIC MEN-TRIGGER HANDLING ---
+# --- MEN-TRIGGER HANDLING ---
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
         
-    # Jeśli bot został tylko spingowany bez dodatkowego tekstu, wypluj systemowy help panel
     if bot.user.mentioned_in(message) and len(message.content.strip().split()) == 1:
         ctx = await bot.get_context(message)
         await pro_help(ctx)
@@ -274,7 +273,7 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-# --- PRESENCE CLONING subsystem ---
+# --- PRESENCE CLONING ---
 @bot.event
 async def on_presence_update(before, after):
     global current_user_status
