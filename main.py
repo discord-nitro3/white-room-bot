@@ -7,12 +7,12 @@ from threading import Thread
 import yt_dlp
 import asyncio
 
-# --- SERWER FLASK ---
+# --- FLASK SERVER ---
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "1v99 Ultra Sync: Active"
+    return "1v99 Ultimate Engine: Active"
 
 def run():
     app.run(host='0.0.0.0', port=8080)
@@ -20,7 +20,7 @@ def run():
 def keep_alive():
     Thread(target=run).start()
 
-# --- REPLIKATOR & SILNIK AUDIO PRO (1v99) ---
+# --- REPLIKATOR & AUDIO PRO CORPS (1v99) ---
 intents = discord.Intents.default()
 intents.presences = True
 intents.members = True
@@ -28,7 +28,8 @@ intents.message_content = True
 intents.guilds = True
 intents.voice_states = True     
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+# Dodanie obsługi pingu jako alternatywnego prefixu bota
+bot = commands.Bot(command_prefix=commands.when_mentioned_or("!"), intents=intents, help_command=None)
 
 USER_TO_COPY_ID = 1143856525648076812
 
@@ -52,13 +53,11 @@ music_queues = {}
 current_user_status = discord.Status.online
 
 async def update_bot_presence(track_title=None):
-    """Aktualizuje status bota zachowując kropkę i tekst Playing: utwór"""
     global current_user_status
     activity = discord.Game(name=f"Playing: {track_title}") if track_title else None
     await bot.change_presence(status=current_user_status, activity=activity)
 
 def format_duration(seconds):
-    """Formatowanie sekund do postaci MM:SS"""
     if not seconds:
         return "Live Stream"
     minutes = seconds // 60
@@ -66,7 +65,6 @@ def format_duration(seconds):
     return f"{minutes:02d}:{seconds:02d}"
 
 def create_music_embed(track_info, status="Now Playing"):
-    """Tworzy profesjonalny, czarny Embed z informacjami o utworze"""
     embed = discord.Embed(
         title=track_info['title'],
         url=track_info['original_url'],
@@ -80,13 +78,13 @@ def create_music_embed(track_info, status="Now Playing"):
     if track_info['thumbnail']:
         embed.set_thumbnail(url=track_info['thumbnail'])
         
-    embed.set_footer(text="1v99 Audio Core Integration", icon_url=bot.user.avatar.url if bot.user.avatar else None)
+    embed.set_footer(text="1v99 Core Integration", icon_url=bot.user.avatar.url if bot.user.avatar else None)
     return embed
 
-# --- INTERAKTYWNE PRZYCISKI (VIEW) ---
+# --- MUSIC PANEL BUTTONS ---
 class MusicControlView(discord.ui.View):
     def __init__(self, ctx):
-        super().__init__(timeout=None) # Przyciski nie wygasają
+        super().__init__(timeout=None)
         self.ctx = ctx
 
     @discord.ui.button(label="Skip ⏭️", style=discord.ButtonStyle.secondary, custom_id="btn_skip")
@@ -94,9 +92,9 @@ class MusicControlView(discord.ui.View):
         vc = self.ctx.voice_client
         if vc and vc.is_playing():
             vc.stop()
-            await interaction.response.send_message("Track skipped via control panel.", ephemeral=True)
+            await interaction.response.send_message("Track skipped via control interface.", ephemeral=True)
         else:
-            await interaction.response.send_message("Nothing is playing right now.", ephemeral=True)
+            await interaction.response.send_message("No active playback found.", ephemeral=True)
 
     @discord.ui.button(label="Stop & Clear ⏹️", style=discord.ButtonStyle.danger, custom_id="btn_clear")
     async def clear_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -107,7 +105,7 @@ class MusicControlView(discord.ui.View):
         if vc:
             await vc.disconnect()
         await update_bot_presence(None)
-        await interaction.response.send_message("Queue cleared and disconnected via control panel.", ephemeral=True)
+        await interaction.response.send_message("Queue purged. System disconnected.", ephemeral=True)
 
 def check_queue(ctx):
     guild_id = ctx.guild.id
@@ -129,14 +127,14 @@ def check_queue(ctx):
         bot.loop.create_task(update_bot_presence(None))
         print(f"[VOICE] Queue concluded for guild {guild_id}")
 
+# --- COMMANDS SECTION ---
 @bot.command()
 async def play(ctx, *, search: str):
     if not ctx.author.voice:
         return
 
-    # Blokada YouTube dla stabilności serwerowni
     if "youtube.com" in search or "youtu.be" in search:
-        await ctx.send("`[SYSTEM ERROR]` YouTube extraction is restricted on this node. Use SoundCloud or text queries.")
+        await ctx.send("`[ERROR]` YouTube extraction is restricted. Use SoundCloud queries.")
         return
 
     voice_channel = ctx.author.voice.channel
@@ -146,7 +144,7 @@ async def play(ctx, *, search: str):
     if guild_id not in music_queues:
         music_queues[guild_id] = []
 
-    status_msg = await ctx.send("`[SYSTEM]` Fetching audio metadata...")
+    status_msg = await ctx.send("`[SYSTEM]` Fetching track metadata...")
 
     try:
         loop = asyncio.get_event_loop()
@@ -156,7 +154,7 @@ async def play(ctx, *, search: str):
             data = data['entries'][0]
             
         if not data:
-            await status_msg.edit(content="`[ERROR]` Requested track could not be resolved.")
+            await status_msg.edit(content="`[ERROR]` Target track unresolved.")
             return
 
         track_info = {
@@ -187,30 +185,27 @@ async def play(ctx, *, search: str):
             await ctx.send(embed=embed, view=view)
             
     except Exception as e:
-        print(f"[ERROR] Audio exception: {e}")
-        await status_msg.edit(content="`[CRITICAL]` Failed to initialize streaming audio source.")
+        print(f"[ERROR] Stream exception: {e}")
+        await status_msg.edit(content="`[CRITICAL]` Streaming subsystem failed.")
 
 @bot.command(name="queue", aliases=["q"])
 async def show_queue(ctx):
-    """Wyświetla aktualną kolejkę w profesjonalnym bloku kodu"""
     guild_id = ctx.guild.id
     if guild_id in music_queues and music_queues[guild_id]:
         tracks = "\n".join([f"[{i+1:02d}] {track['title']} ({format_duration(track['duration'])})" for i, track in enumerate(music_queues[guild_id])])
         await ctx.send(f"```ini\n[1v99 SYSTEM PENDING QUEUE]\n{tracks}\n```")
     else:
-        await ctx.send("`[SYSTEM]` The audio queue is currently vacant.")
+        await ctx.send("`[SYSTEM]` Audio queue is empty.")
 
 @bot.command()
 async def skip(ctx):
-    """Pomiń utwór komendą tekstową"""
     vc = ctx.voice_client
     if vc and vc.is_playing():
         vc.stop()
-        await ctx.send("`[SYSTEM]` Current track terminated manually.")
+        await ctx.send("`[SYSTEM]` Track terminated manually.")
 
 @bot.command()
 async def clear(ctx):
-    """Wyczyść kolejkę komendą tekstową"""
     guild_id = ctx.guild.id
     if guild_id in music_queues:
         music_queues[guild_id].clear()
@@ -218,37 +213,68 @@ async def clear(ctx):
     if vc:
         await vc.disconnect()
     await update_bot_presence(None)
-    await ctx.send("`[SYSTEM]` Queue wiped. Voice matrix decoupled.")
+    await ctx.send("`[SYSTEM]` Matrix reset. Voice connection unlinked.")
 
 @bot.command()
 async def status(ctx):
-    """Raport integralności bota i replikacji"""
     member = ctx.guild.get_member(USER_TO_COPY_ID)
     user_dot = member.status if member else "unresolved"
     await ctx.send(
         f"```yaml\n"
-        f"1v99 // CORE INTEGRITY REPORT\n"
-        f"-----------------------------\n"
-        f"Latency: {round(bot.latency * 1000)}ms\n"
-        f"Target Presence: {user_dot}\n"
-        f"Matrix Status: Operational\n"
+        f"1v99 // INTEGRITY CONTROL\n"
+        f"-------------------------\n"
+        f"Network Latency : {round(bot.latency * 1000)}ms\n"
+        f"Presence Link   : {user_dot}\n"
+        f"Core State      : Operational\n"
         f"```"
     )
 
-# --- SYSTEM AUTOMATYCZNEGO OPUSZCZANIA VC ---
+@bot.command(name="help", aliases=["h"])
+async def pro_help(ctx):
+    """Zaawansowana, szczegółowa komenda pomocy w surowym stylu"""
+    embed = discord.Embed(
+        title="1v99 SYSTEM COMMAND MANIFEST",
+        description="All commands can be invoked using either the `!` prefix or by directly mentioning the bot (@1v99).",
+        color=0x000000
+    )
+    embed.add_field(name="🎵 !play [query / link]", value="Streams audio via SoundCloud. Supplying text triggers search parameters.", inline=False)
+    embed.add_field(name="⏭️ !skip", value="Forces termination of current track and advances queue matrix.", inline=False)
+    embed.add_field(name="📋 !queue / !q", value="Exhibits all pending tracks queued for playback.", inline=False)
+    embed.add_field(name="⏹️ !clear", value="Flushes queue entirely and disconnects from the voice node.", inline=False)
+    embed.add_field(name="📊 !status", value="Performs a real-time system and latency diagnostic checklist.", inline=False)
+    embed.add_field(name="ℹ️ !help / !h", value="Displays this mainframe instruction matrix.", inline=False)
+    
+    embed.set_footer(text="1v99 Core Interface Protocol")
+    await ctx.send(embed=embed)
+
+# --- AUTOMATIC LEAVE TRIGGER ---
 @bot.event
 async def on_voice_state_update(member, before, after):
     if member.guild.voice_client:
         bot_vc = member.guild.voice_client.channel
-        if len(bot_vc.members) == 1: # Bot został całkiem sam
+        if len(bot_vc.members) == 1:
             await member.guild.voice_client.disconnect()
             guild_id = member.guild.id
             if guild_id in music_queues:
                 music_queues[guild_id].clear()
             await update_bot_presence(None)
-            print(f"[VOICE] Channel auto-vacated in guild {guild_id} due to inactivity.")
+            print(f"[VOICE] Auto-vacated due to lack of users.")
 
-# --- OBSŁUGA REPLIKACJI KROPKI ---
+# --- APERIODIC MEN-TRIGGER HANDLING ---
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+        
+    # Jeśli bot został tylko spingowany bez dodatkowego tekstu, wypluj systemowy help panel
+    if bot.user.mentioned_in(message) and len(message.content.strip().split()) == 1:
+        ctx = await bot.get_context(message)
+        await pro_help(ctx)
+        return
+
+    await bot.process_commands(message)
+
+# --- PRESENCE CLONING subsystem ---
 @bot.event
 async def on_presence_update(before, after):
     global current_user_status
@@ -275,8 +301,8 @@ async def on_ready():
             current_user_status = member.status
             await bot.change_presence(status=current_user_status)
             break
-    print(f"[SYSTEM] 1v99 Advanced Engine deployed successfully.")
+    print(f"[SYSTEM] 1v99 Absolute Core Deployed.")
 
-# --- ROZRUCH ---
+# --- SYSTEM EXECUTION ---
 keep_alive()
 bot.run(os.environ.get('DISCORD_TOKEN'))
