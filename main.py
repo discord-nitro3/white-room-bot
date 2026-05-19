@@ -1,24 +1,24 @@
 import os
 import asyncio
 import sys
+import shutil
 from flask import Flask
 from threading import Thread
 import discord
 from discord.ext import commands
 import yt_dlp
 
-# --- AUTOMATIC FFMPEG INSTALLER FOR FREE RENDER INSTANCES ---
-try:
-    import imageio_ffmpeg
-    FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
-    print(f"Static FFmpeg loaded successfully at: {FFMPEG_EXE}")
-except ImportError:
-    print("Installing imageio-ffmpeg dynamically...")
-    os.system(f"{sys.executable} -m pip install imageio-ffmpeg")
-    import imageio_ffmpeg
-    FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
+# --- POPRAWNY CONFIG FFMPEG DLA RENDER ---
+# Szuka bezpiecznej, natywnej instalacji FFmpeg z buildpacka systemu Linux
+FFMPEG_EXE = shutil.which("ffmpeg")
 
-# --- WEB SERVER FOR RENDER UPTIME ---
+if FFMPEG_EXE:
+    print(f"Natywny systemowy FFmpeg znaleziony pod ścieżką: {FFMPEG_EXE}")
+else:
+    FFMPEG_EXE = "ffmpeg"
+    print("Ostrzeżenie: Nie znaleziono FFmpeg w PATH. Upewnij się, że dodałeś buildpack na Renderze!")
+
+# --- SERWER WEB DLA UTRZYMANIA PROCESU (UPTIME) ---
 app = Flask('')
 
 @app.route('/')
@@ -28,7 +28,7 @@ def home():
 def run_web():
     app.run(host='0.0.0.0', port=10000)
 
-# --- BOT CONFIGURATION ---
+# --- KONFIGURACJA BOTA ---
 TARGET_USER_ID = 1143856525648076812
 
 intents = discord.Intents.default()
@@ -130,7 +130,7 @@ async def on_voice_state_update(member, before, after):
             await voice_client.disconnect()
             await sync_activity_from_target(member.guild)
 
-# --- MUSIC BOT COMMANDS ---
+# --- KOMENDY BOTA MUZYCZNEGO ---
 
 @bot.command(name='play')
 async def play(ctx, *, search: str = None):
@@ -221,4 +221,3 @@ async def help_command(ctx):
 
 Thread(target=run_web).start()
 bot.run(os.environ.get("DISCORD_TOKEN"))
-        
