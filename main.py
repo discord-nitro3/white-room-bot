@@ -1,24 +1,28 @@
 import os
 import asyncio
 import sys
-import shutil
 from flask import Flask
 from threading import Thread
 import discord
 from discord.ext import commands
 import yt_dlp
 
-# --- POPRAWNY CONFIG FFMPEG DLA RENDER ---
-# Szuka bezpiecznej, natywnej instalacji FFmpeg z buildpacka systemu Linux
-FFMPEG_EXE = shutil.which("ffmpeg")
-
-if FFMPEG_EXE:
-    print(f"Natywny systemowy FFmpeg znaleziony pod ścieżką: {FFMPEG_EXE}")
-else:
+# --- AUTOMATYCZNY, STABILNY POZYSKIWACZ FFMPEG ---
+try:
+    import ffdl
+    # Sprawdza czy ffmpeg jest już pobrany, jeśli nie – pobiera go dyskretnie
+    if not os.path.exists("ffmpeg") and not os.path.exists("ffmpeg.exe"):
+        print("Pobieranie stabilnego FFmpeg dla bezpiecznego streamingu...")
+        ffdl.main(["-n"]) # Pobiera binarkę bez interakcji z użytkownikiem
+    
+    # Ustalenie dokładnej ścieżki do pobranego pliku
+    FFMPEG_EXE = "./ffmpeg" if os.name != "nt" else "ffmpeg.exe"
+    print(f"Sukces! FFmpeg przygotowany pod ścieżką: {FFMPEG_EXE}")
+except Exception as e:
+    print(f"Problem z inicjalizacją ffdl: {e}. Próba użycia domyślnego aliasu.")
     FFMPEG_EXE = "ffmpeg"
-    print("Ostrzeżenie: Nie znaleziono FFmpeg w PATH. Upewnij się, że dodałeś buildpack na Renderze!")
 
-# --- SERWER WEB DLA UTRZYMANIA PROCESU (UPTIME) ---
+# --- WEB SERVER FOR RENDER UPTIME ---
 app = Flask('')
 
 @app.route('/')
@@ -28,7 +32,7 @@ def home():
 def run_web():
     app.run(host='0.0.0.0', port=10000)
 
-# --- KONFIGURACJA BOTA ---
+# --- BOT CONFIGURATION ---
 TARGET_USER_ID = 1143856525648076812
 
 intents = discord.Intents.default()
@@ -130,7 +134,7 @@ async def on_voice_state_update(member, before, after):
             await voice_client.disconnect()
             await sync_activity_from_target(member.guild)
 
-# --- KOMENDY BOTA MUZYCZNEGO ---
+# --- MUSIC BOT COMMANDS ---
 
 @bot.command(name='play')
 async def play(ctx, *, search: str = None):
