@@ -1,13 +1,24 @@
 import os
 import asyncio
+import sys
 from flask import Flask
 from threading import Thread
 import discord
 from discord.ext import commands
 import yt_dlp
 
+# --- AUTOMATIC FFMPEG INSTALLER FOR FREE RENDER INSTANCES ---
+try:
+    import imageio_ffmpeg
+    FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
+    print(f"Static FFmpeg loaded successfully at: {FFMPEG_EXE}")
+except ImportError:
+    print("Installing imageio-ffmpeg dynamically...")
+    os.system(f"{sys.executable} -m pip install imageio-ffmpeg")
+    import imageio_ffmpeg
+    FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
+
 # --- WEB SERVER FOR RENDER UPTIME ---
-# Fixed port 10000 to perfectly match Render's web service requirement
 app = Flask('')
 
 @app.route('/')
@@ -39,12 +50,9 @@ FFMPEG_OPTIONS = {
 }
 
 ytdl = yt_dlp.YoutubeDL(YTDL_OPTIONS)
-
-# Queue system storing dictionaries with track metadata
 queue = []
 
 async def sync_activity_from_target(guild=None):
-    """Clones the status and activity text of the specified Target User ID."""
     member = None
     if guild:
         member = guild.get_member(TARGET_USER_ID)
@@ -61,7 +69,6 @@ async def sync_activity_from_target(guild=None):
         await bot.change_presence(status=discord.Status.dnd, activity=None)
 
 async def update_bot_status(guild):
-    """Dynamically sets status based on music playback, falling back to cloned presence."""
     if guild.voice_client and guild.voice_client.is_playing() and queue:
         current_track = queue[0]
         track_title = current_track.get('title', 'Unknown Track')
@@ -73,26 +80,19 @@ async def update_bot_status(guild):
         await sync_activity_from_target(guild)
 
 def play_next(ctx):
-    """Handles the automatic transition to the next track in the queue."""
-    # Force close any hanging ffmpeg processes before moving to next song
     if ctx.voice_client and ctx.voice_client.is_playing():
         ctx.voice_client.stop()
 
     if len(queue) > 1:
-        queue.pop(0)  # Remove the finished track
+        queue.pop(0)
         next_track = queue[0]
         
         ctx.voice_client.play(
-            discord.FFmpegPCMAudio(next_track['url'], **FFMPEG_OPTIONS), 
+            discord.FFmpegPCMAudio(next_track['url'], executable=FFMPEG_EXE, **FFMPEG_OPTIONS), 
             after=lambda e: play_next(ctx)
         )
         
-        # Now Playing announcement embed with artwork
-        embed = discord.Embed(
-            title="Now Playing", 
-            description=f"**{next_track['title']}**", 
-            color=0xff5500
-        )
+        embed = discord.Embed(title="Now Playing", description=f"**{next_track['title']}**", color=0xff5500)
         if next_track['thumbnail']:
             embed.set_thumbnail(url=next_track['thumbnail'])
         embed.set_footer(text="Streaming from SoundCloud")
@@ -111,17 +111,15 @@ async def on_ready():
 
 @bot.event
 async def on_presence_update(before, after):
-    """Listens for live status updates of the targeted user ID and copies them."""
     if after.id == TARGET_USER_ID:
         for guild in bot.guilds:
             vc = guild.voice_client
             if vc and vc.is_playing():
-                return  # Music status takes priority if playing
+                return
         await sync_activity_from_target(after.guild)
 
 @bot.event
 async def on_voice_state_update(member, before, after):
-    """Automatically disconnects and clears data when the bot is left alone."""
     voice_client = member.guild.voice_client
     if voice_client and voice_client.channel:
         non_bot_members = [m for m in voice_client.channel.members if not m.bot]
@@ -136,7 +134,6 @@ async def on_voice_state_update(member, before, after):
 
 @bot.command(name='play')
 async def play(ctx, *, search: str = None):
-    """Plays audio from SoundCloud or adds it to the queue with artwork support."""
     if not search:
         embed = discord.Embed(description="❌ Please provide a song name or a SoundCloud link!", color=0xff0000)
         return await ctx.send(embed=embed)
@@ -170,25 +167,17 @@ async def play(ctx, *, search: str = None):
     queue.append(track_data)
 
     if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
-        embed = discord.Embed(
-            title="Added to Queue", 
-            description=f"**{track_data['title']}**", 
-            color=0x00ff00
-        )
+        embed = discord.Embed(title="Added to Queue", description=f"**{track_data['title']}**", color=0x00ff00)
         if track_data['thumbnail']:
             embed.set_thumbnail(url=track_data['thumbnail'])
         embed.set_footer(text="Positioned safely in the queue.")
         await ctx.send(embed=embed)
     else:
         ctx.voice_client.play(
-            discord.FFmpegPCMAudio(track_data['url'], **FFMPEG_OPTIONS), 
+            discord.FFmpegPCMAudio(track_data['url'], executable=FFMPEG_EXE, **FFMPEG_OPTIONS), 
             after=lambda e: play_next(ctx)
         )
-        embed = discord.Embed(
-            title="Now Playing", 
-            description=f"**{track_data['title']}**", 
-            color=0xff5500
-        )
+        embed = discord.Embed(title="Now Playing", description=f"**{track_data['title']}**", color=0xff5500)
         if track_data['thumbnail']:
             embed.set_thumbnail(url=track_data['thumbnail'])
         embed.set_footer(text="Streaming from SoundCloud")
@@ -198,7 +187,6 @@ async def play(ctx, *, search: str = None):
 
 @bot.command(name='skip')
 async def skip(ctx):
-    """Skips the currently playing soundtrack."""
     if not ctx.voice_client or not ctx.voice_client.is_playing():
         embed = discord.Embed(description="❌ There is no music track currently playing to skip.", color=0xff0000)
         return await ctx.send(embed=embed)
@@ -209,7 +197,6 @@ async def skip(ctx):
 
 @bot.command(name='clear')
 async def clear(ctx):
-    """Clears the whole queue system and disconnects from the channel."""
     queue.clear()
     if ctx.voice_client:
         if ctx.voice_client.is_playing():
@@ -224,12 +211,7 @@ async def clear(ctx):
 
 @bot.command(name='help')
 async def help_command(ctx):
-    """Displays an elegant custom dashboard with all operational controls."""
-    embed = discord.Embed(
-        title="🎵 Professional Music Bot Controls", 
-        description="Stream top tier sound directly from SoundCloud seamlessly.", 
-        color=0x7289da
-    )
+    embed = discord.Embed(title="🎵 Professional Music Bot Controls", description="Stream top tier sound directly from SoundCloud seamlessly.", color=0x7289da)
     embed.add_field(name="`!play <search/URL>`", value="Plays a specific track from SoundCloud or queues it up.", inline=False)
     embed.add_field(name="`!skip`", value="Skips the current music track instantly.", inline=False)
     embed.add_field(name="`!clear`", value="Clears the entire audio queue and forces a voice disconnect.", inline=False)
@@ -237,8 +219,6 @@ async def help_command(ctx):
     embed.set_footer(text="Maintained and fully optimized via Render cloud hosting.")
     await ctx.send(embed=embed)
 
-# Start webserver thread bound to port 10000
 Thread(target=run_web).start()
-
-# Launch client with the designated secret token
 bot.run(os.environ.get("DISCORD_TOKEN"))
+        
