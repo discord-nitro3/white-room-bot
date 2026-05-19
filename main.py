@@ -1,19 +1,18 @@
 ```python
 import os
+import asyncio
 import discord
 from discord.ext import commands
-from discord.ui import Button, View
 from flask import Flask
 from threading import Thread
-import yt_dlp
-import asyncio
+import yt_dlp as youtube_dl
 
-# --- REZERWOWY SERWER HTTP (KEEP-ALIVE) ---
+# --- SERWER KEEP-ALIVE (Utrzymanie hostingu Render) ---
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "1v98 Audio Matrix: Active"
+    return "1v99 Music Core: Active & Stable"
 
 def run():
     app.run(host='0.0.0.0', port=8080)
@@ -21,248 +20,190 @@ def run():
 def keep_alive():
     Thread(target=run).start()
 
-# --- KONFIGURACJA URZĄDZENIA ---
-intents = discord.Intents.default()
-intents.presences = True
-intents.members = True
-intents.message_content = True  
-intents.guilds = True
-intents.voice_states = True     
+# --- PROFESSIONAL YTDL CONFIGURATION (SoundCloud & YT Stability) ---
+youtube_dl.utils.bug_reports_message = lambda: ''
 
-bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
-
-USER_TO_COPY_ID = 1143856525648076812
-current_user_status = discord.Status.online
-
-# Surowe, bezpieczne opcje bez zbędnych zagnieżdżeń
-YTDL_OPTIONS = {
+ytdl_format_options = {
     'format': 'bestaudio/best',
+    'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
+    'restrictfilenames': True,
     'noplaylist': True,
-    'quiet': True,
-    'default_search': 'scsearch', 
     'nocheckcertificate': True,
     'ignoreerrors': True,
+    'logtostderr': False,
+    'quiet': True,
     'no_warnings': True,
-    'http_headers': {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'pl,en;q=0.5'
-    }
+    'default_search': 'auto',
+    'source_address': '0.0.0.0',
+    'force-ipv4': True,
+    'cachedir': False
 }
 
-FFMPEG_OPTIONS = {
-    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-    'options': '-vn'
+ffmpeg_options = {
+    'options': '-vn',
+    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5'
 }
 
-ytdl = yt_dlp.YoutubeDL(YTDL_OPTIONS)
-music_queues = {}
+ytdl = youtube_dl.YoutubeDL(ytdl_format_options)
 
-async def update_bot_presence(track_title=None):
-    global current_user_status
-    activity = discord.Game(name=f"Sygnał: {track_title}") if track_title else None
-    await bot.change_presence(status=current_user_status, activity=activity)
+class YTDLSource(discord.PCMVolumeTransformer):
+    def __init__(self, source, *, data, volume=0.5):
+        super().__init__(source, volume)
+        self.data = data
+        self.title = data.get('title')
+        self.url = data.get('url')
 
-def format_duration(seconds):
-    if not seconds:
-        return "Strumień"
-    m = seconds // 60
-    s = seconds % 60
-    return f"{m:02d}:{s:02d}"
-
-def create_music_embed(track_info, status="POBIERANIE SYGNAŁU"):
-    embed = discord.Embed(
-        title=track_info['title'],
-        url=track_info['original_url'],
-        color=0x000000
-    )
-    embed.set_author(name=status, icon_url=bot.user.avatar.url if bot.user.avatar else None)
-    embed.add_field(name="Nadawca", value=track_info['uploader'], inline=True)
-    embed.add_field(name="Długość", value=format_duration(track_info['duration']), inline=True)
-    embed.add_field(name="Protokół", value=track_info['extractor'], inline=True)
-    
-    if track_info['thumbnail']:
-        embed.set_thumbnail(url=track_info['thumbnail'])
+    @classmethod
+    async def from_url(cls, url, *, loop=None, stream=True):
+        loop = loop or asyncio.get_event_loop()
+        data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=not stream))
         
-    embed.set_footer(text="1v98 Urządzenie Odbiorcze", icon_url=bot.user.avatar.url if bot.user.avatar else None)
-    return embed
-
-# --- PANEL INTERAKTYWNY ---
-class AudioControlView(discord.ui.View):
-    def __init__(self, ctx):
-        super().__init__(timeout=None)
-        self.ctx = ctx
-
-    @discord.ui.button(label="Pauza / Wznów ⏸️", style=discord.ButtonStyle.secondary, custom_id="btn_play_pause")
-    async def play_pause(self, interaction: discord.Interaction, button: discord.ui.Button):
-        vc = self.ctx.voice_client
-        if not vc:
-            return
-        if vc.is_playing():
-            vc.pause()
-            await interaction.response.send_message("Transmisja wstrzymana.", ephemeral=True)
-        elif vc.is_paused():
-            vc.resume()
-            await interaction.response.send_message("Transmisja wznowiona.", ephemeral=True)
-
-    @discord.ui.button(label="Pomiń ⏭️", style=discord.ButtonStyle.primary, custom_id="btn_skip_track")
-    async def skip_track(self, interaction: discord.Interaction, button: discord.ui.Button):
-        vc = self.ctx.voice_client
-        if vc and (vc.is_playing() or vc.is_paused()):
-            vc.stop()
-            await interaction.response.send_message("Sygnał pominięty.", ephemeral=True)
-
-    @discord.ui.button(label="Rozłącz ⏹️", style=discord.ButtonStyle.danger, custom_id="btn_disconnect")
-    async def disconnect_bot(self, interaction: discord.Interaction, button: discord.ui.Button):
-        g_id = self.ctx.guild.id
-        if g_id in music_queues:
-            music_queues[g_id].clear()
-        vc = self.ctx.voice_client
-        if vc:
-            await vc.disconnect()
-        await update_bot_presence(None)
-        await interaction.response.send_message("Węzeł zamknięty. Rozłączono.", ephemeral=True)
-
-async def play_next(ctx):
-    g_id = ctx.guild.id
-    vc = ctx.voice_client
-
-    if not vc or not vc.is_connected():
-        return
-
-    if g_id in music_queues and music_queues[g_id]:
-        next_track = music_queues[g_id].pop(0)
-        
-        def after_finished(err):
-            coro = play_next(ctx)
-            asyncio.run_coroutine_threadsafe(coro, bot.loop)
-
-        vc.play(
-            discord.FFmpegPCMAudio(next_track['url'], **FFMPEG_OPTIONS), 
-            after=after_finished
-        )
-        await update_bot_presence(next_track['title'])
-        
-        embed = create_music_embed(next_track, status="TERAZ ODTWARZANE")
-        view = AudioControlView(ctx)
-        await ctx.send(embed=embed, view=view)
-    else:
-        await update_bot_presence(None)
-
-@bot.command()
-async def play(ctx, *, search: str):
-    if not ctx.author.voice:
-        await ctx.send("`[SYSTEM]` Brak połączenia z VC.")
-        return
-
-    if "youtube.com" in search or "youtu.be" in search:
-        await ctx.send("`[SYSTEM]` Blokada węzła YouTube. Użyj SoundCloud.")
-        return
-
-    vc = ctx.voice_client if ctx.voice_client else await ctx.author.voice.channel.connect()
-    g_id = ctx.guild.id
-    
-    if g_id not in music_queues:
-        music_queues[g_id] = []
-
-    status_msg = await ctx.send("`[SYSTEM]` Przechwytywanie strumienia...")
-
-    try:
-        query = search
-        if not search.startswith("http"):
-            query = f"scsearch:{search}"
-
-        loop = asyncio.get_event_loop()
-        data = await loop.run_in_executor(None, lambda: ytdl.extract_info(query, download=False))
-        
-        if 'entries' in data and data['entries']:
+        if 'entries' in data:
             data = data['entries'][0]
-            
-        if not data or 'url' not in data:
-            await status_msg.edit(content="`[SYSTEM ERROR]` Nie odnaleziono ścieżki.")
-            return
 
-        track_info = {
-            'url': data['url'],
-            'original_url': data.get('webpage_url', 'https://soundcloud.com'),
-            'title': data.get('title', 'Unknown Track'),
-            'uploader': data.get('uploader', 'Unknown Artist'),
-            'duration': data.get('duration', 0),
-            'thumbnail': data.get('thumbnail', None),
-            'extractor': data.get('extractor_key', 'SoundCloud')
-        }
+        if data is None:
+            return None
 
-        if vc.is_playing() or vc.is_paused():
-            music_queues[g_id].append(track_info)
-            embed = create_music_embed(track_info, status="DODANO DO KOLEJKI")
-            await status_msg.delete()
-            await ctx.send(embed=embed)
-        else:
-            music_queues[g_id].append(track_info)
-            await status_msg.delete()
-            await play_next(ctx)
-            
-    except Exception as e:
-        await status_msg.edit(content="`[CRITICAL]` Przerwano połączenie ze źródłem.")
+        filename = data['url'] if stream else ytdl.prepare_filename(data)
+        return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
 
-@bot.command()
-async def skip(ctx):
-    vc = ctx.voice_client
-    if vc and (vc.is_playing() or vc.is_paused()):
-        vc.stop()
-        await ctx.send("`[SYSTEM]` Pomyślnie pominięto utwór.")
+# --- DISCORD SYSTEM CONFIGURATION ---
+intents = discord.Intents.default()
+intents.message_content = True  
+intents.guilds = True
+intents.voice_states = True
 
-@bot.command()
-async def stop(ctx):
-    g_id = ctx.guild.id
-    if g_id in music_queues:
-        music_queues[g_id].clear()
-    vc = ctx.voice_client
-    if vc:
-        await vc.disconnect()
-    await update_bot_presence(None)
-    await ctx.send("`[SYSTEM]` Transmisja zatrzymana.")
+bot = commands.Bot(command_prefix="!", intents=intents, help_command=None, case_insensitive=True)
 
-# --- AUTO-LEAVE ---
-@bot.event
-async def on_voice_state_update(member, before, after):
-    if member.guild.voice_client:
-        bot_vc = member.guild.voice_client.channel
-        if len(bot_vc.members) == 1:
-            await member.guild.voice_client.disconnect()
-            g_id = member.guild.id
-            if g_id in music_queues:
-                music_queues[g_id].clear()
-            await update_bot_presence(None)
+# --- BAZA UTWORÓW (Szybkie aliasy tekstowe do odtwarzania) ---
+TRACK_MAPPING = {
+    "laced up": "https://soundcloud.com/rxssy/laced-up-w-burgos",
+    "she not smilin": "https://soundcloud.com/rxssy/she-not-smilin-while-im-winnin",
+    "gdzie moj dom": "https://soundcloud.com/youngmulti/gdzie-moj-dom",
+    "crazy for you": "https://soundcloud.com/rebzyyx/im-so-crazy-for-youuu"
+}
 
-# --- PRESENCE SYNC ---
-@bot.event
-async def on_presence_update(before, after):
-    global current_user_status
-    if after.id == USER_TO_COPY_ID:
-        current_user_status = after.status
-        vc = None
-        for guild in bot.guilds:
-            if guild.voice_client:
-                vc = guild.voice_client
-                break
-        if vc and vc.is_playing() and bot.activity:
-            await bot.change_presence(status=current_user_status, activity=bot.activity)
-        else:
-            await bot.change_presence(status=current_user_status, activity=None)
-
+# --- STALE ZDEFINIOWANY STATUS (DND) ---
 @bot.event
 async def on_ready():
-    global current_user_status
-    for guild in bot.guilds:
-        m = guild.get_member(USER_TO_COPY_ID)
-        if m:
-            current_user_status = m.status
-            await bot.change_presence(status=current_user_status)
-            break
-    print("[SYSTEM] 1v98 Core Active.")
+    # Stały status Do Not Disturb (Nie przeszkadzać)
+    await bot.change_presence(
+        status=discord.Status.dnd, 
+        activity=discord.Game(name="!help | 1v99 Matrix")
+    )
+    print("[SYSTEM] 1v99 Professional Music Core deployed on host.")
 
+# --- KOMENDY DISCORD (Czysty Profesjonalizm) ---
+
+@bot.command(name="play", aliases=["p"])
+async def cmd_play(ctx, *, search: str):
+    """Odtwarzanie utworów z SoundCloud / YouTube lub słów kluczowych"""
+    if not ctx.author.voice:
+        embed = discord.Embed(title="❌ BŁĄD SYSTEMU", description="Musisz najpierw dołączyć do kanału głosowego.", color=0xff0000)
+        return await ctx.send(embed=embed)
+
+    # Sprawdzenie uprawnień do dołączenia i mówienia
+    permissions = ctx.author.voice.channel.permissions_for(ctx.me)
+    if not permissions.connect or not permissions.speak:
+        embed = discord.Embed(title="❌ BRAK UPRAWNIEŃ", description="Nie mam uprawnień do połączenia lub mówienia na tym kanale.", color=0xff0000)
+        return await ctx.send(embed=embed)
+
+    # Automatyczne mapowanie skrótów z bazy danych
+    query = search.lower().strip()
+    if query in TRACK_MAPPING:
+        url_to_play = TRACK_MAPPING[query]
+    else:
+        url_to_play = search
+
+    async with ctx.typing():
+        # Dołączenie do kanału, jeśli bot jeszcze tam nie jest
+        if ctx.voice_client is None:
+            await ctx.author.voice.channel.connect()
+        elif ctx.voice_client.channel != ctx.author.voice.channel:
+            await ctx.voice_client.move_to(ctx.author.voice.channel)
+
+        try:
+            player = await YTDLSource.from_url(url_to_play, loop=bot.loop, stream=True)
+            if player is None:
+                raise Exception("Nie znaleziono strumienia.")
+                
+            if ctx.voice_client.is_playing():
+                ctx.voice_client.stop()
+
+            ctx.voice_client.play(player, after=lambda e: print(f'Odtwarzanie zakończone: {e}') if e else None)
+            
+            embed = discord.Embed(
+                title="🔮 REPRODUKCJA AUDIO",
+                description=f"**Odtwarzanie:** `{player.title}`",
+                color=0x4d0099
+            )
+            embed.set_footer(text="Protokół: 1v99 Audio Engine")
+            await ctx.send(embed=embed)
+
+        except Exception as e:
+            embed = discord.Embed(
+                title="⚠️ PROCES PRZERWANY",
+                description="Nie udało się załadować utworu. Upewnij się, że link SoundCloud/YT jest publiczny.",
+                color=0xffaa00
+            )
+            await ctx.send(embed=embed)
+
+@bot.command(name="stop", aliases=["leave", "dc"])
+async def cmd_stop(ctx):
+    """Zatrzymanie muzyki i opuszczenie kanału"""
+    if ctx.voice_client:
+        await ctx.voice_client.disconnect()
+        embed = discord.Embed(description="🔌 Rozłączono z sektorem głosowym.", color=0x000000)
+        await ctx.send(embed=embed)
+    else:
+        embed = discord.Embed(description="Bot nie jest połączony z żadnym kanałem.", color=0x333333)
+        await ctx.send(embed=embed)
+
+@bot.command(name="help", aliases=["h"])
+async def cmd_help(ctx):
+    """Profesjonalny panel komend muzycznych"""
+    embed = discord.Embed(
+        title="🌌 1v99 MUSIC CORE INTERFACE",
+        description="Surowy, stabilny system odtwarzania audio.",
+        color=0x000000
+    )
+    embed.add_field(
+        name="🎛️ SYSTEM COMMANDS",
+        value=(
+            "`!play [link/nazwa]` - Odtwarza utwór z SoundCloud, YT lub bazy\n"
+            "`!stop` - Wyłącza odtwarzacz i czyści połączenie głosowe\n"
+            "`!help` - Wyświetla tę konsolę"
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="⚡ SZYBKIE UTWORY (Wpisz zamiast linku)",
+        value="`laced up` | `she not smilin` | `gdzie moj dom` | `crazy for you`",
+        inline=False
+    )
+    embed.set_footer(text="Status: dnd // Tryb: Stały")
+    await ctx.send(embed=embed)
+
+# --- PROFESSIONAL ERROR HANDLING (Zabezpieczenie przed surowymi błędami) ---
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CommandNotFound):
+        return  # Ignoruj nieistniejące komendy w ciszy
+    
+    elif isinstance(error, commands.MissingPermissions):
+        embed = discord.Embed(title="❌ SYSTEM LOCK", description="Nie posiadasz wymaganych uprawnień administratora do tej operacji.", color=0xff0000)
+        await ctx.send(embed=embed)
+        
+    elif isinstance(error, commands.MissingRequiredArgument):
+        embed = discord.Embed(title="⚠️ BŁĄD SKŁADNI", description=f"Komenda wymaga podania argumentu. Wpisz np: `!play laced up`", color=0xffaa00)
+        await ctx.send(embed=embed)
+        
+    else:
+        # Logowanie rzadkich błędów w estetyczny sposób
+        print(f"[BŁĄD KOMENDY]: {error}")
+
+# Inicjalizacja hostingu i uruchomienie bota za pomocą zmiennej środowiskowej
 keep_alive()
-bot.run(os.environ.get('DISCORD_TOKEN'))
+bot.run(os.environ.get("DISCORD_TOKEN"))
 
 ```
