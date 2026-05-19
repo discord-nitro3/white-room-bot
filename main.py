@@ -7,7 +7,7 @@ from discord.ext import commands
 import yt_dlp
 
 # --- WEB SERVER FOR RENDER UPTIME ---
-# Render requires an HTTP port to be active, otherwise the service will time out.
+# Fixed port 10000 to perfectly match Render's web service requirement
 app = Flask('')
 
 @app.route('/')
@@ -15,8 +15,7 @@ def home():
     return "Bot is running perfectly!"
 
 def run_web():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=10000)
 
 # --- BOT CONFIGURATION ---
 TARGET_USER_ID = 1143856525648076812
@@ -75,6 +74,10 @@ async def update_bot_status(guild):
 
 def play_next(ctx):
     """Handles the automatic transition to the next track in the queue."""
+    # Force close any hanging ffmpeg processes before moving to next song
+    if ctx.voice_client and ctx.voice_client.is_playing():
+        ctx.voice_client.stop()
+
     if len(queue) > 1:
         queue.pop(0)  # Remove the finished track
         next_track = queue[0]
@@ -124,6 +127,8 @@ async def on_voice_state_update(member, before, after):
         non_bot_members = [m for m in voice_client.channel.members if not m.bot]
         if len(non_bot_members) == 0:
             queue.clear()
+            if voice_client.is_playing():
+                voice_client.stop()
             await voice_client.disconnect()
             await sync_activity_from_target(member.guild)
 
@@ -149,7 +154,6 @@ async def play(ctx, *, search: str = None):
             if 'entries' in info:
                 info = info['entries'][0]
             
-            # Extract artwork or fall back to user avatar if thumbnail is unavailable
             artwork = info.get('thumbnail') or info.get('uploader_avatar')
             
             track_data = {
@@ -208,6 +212,8 @@ async def clear(ctx):
     """Clears the whole queue system and disconnects from the channel."""
     queue.clear()
     if ctx.voice_client:
+        if ctx.voice_client.is_playing():
+            ctx.voice_client.stop()
         await ctx.voice_client.disconnect()
         embed = discord.Embed(description="⏹️ Queue flushed. Cleaned up and disconnected from the voice channel.", color=0xff0000)
         await ctx.send(embed=embed)
@@ -231,7 +237,7 @@ async def help_command(ctx):
     embed.set_footer(text="Maintained and fully optimized via Render cloud hosting.")
     await ctx.send(embed=embed)
 
-# Start webserver thread for maintaining Render deployment health checks
+# Start webserver thread bound to port 10000
 Thread(target=run_web).start()
 
 # Launch client with the designated secret token
