@@ -6,30 +6,33 @@ import discord
 from discord.ext import commands
 import yt_dlp
 
-# --- SERWER WEB DLA RENDERA ---
-# Render wymaga, aby aplikacja nasłuchiwała na porcie HTTP, inaczej zgłosi błąd wdrożenia.
+# --- WEB SERVER FOR RENDER UPTIME ---
+# Render requires an HTTP port to be active, otherwise the service will time out.
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot gra i trąbi!"
+    return "Bot is running perfectly!"
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
-# --- KONFIGURACJA BOTA ---
+# --- BOT CONFIGURATION ---
+TARGET_USER_ID = 1143856525648076812
+
 intents = discord.Intents.default()
 intents.message_content = True
-# Stały status Do Not Disturb (DND)
-bot = commands.Bot(command_prefix='!', intents=intents, status=discord.Status.dnd)
+intents.presences = True
+intents.members = True
 
-# Konfiguracja yt_dlp dla SoundCloud i streamingu
+bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
+
 YTDL_OPTIONS = {
     'format': 'bestaudio/best',
     'noplaylist': True,
     'quiet': True,
-    'default_search': 'scsearch',  # Domyślne wyszukiwanie na SoundCloud
+    'default_search': 'scsearch',
 }
 FFMPEG_OPTIONS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
@@ -38,109 +41,198 @@ FFMPEG_OPTIONS = {
 
 ytdl = yt_dlp.YoutubeDL(YTDL_OPTIONS)
 
-# Kolejka utworów i przechowywanie nazw
+# Queue system storing dictionaries with track metadata
 queue = []
-titles_queue = []
 
-async def update_status(guild):
-    """Aktualizuje status bota o obecnie grany utwór."""
-    if guild.voice_client and guild.voice_client.is_playing() and titles_queue:
-        current_track = titles_queue[0]
-        await bot.change_presence(
-            status=discord.Status.dnd,
-            activity=discord.Activity(type=discord.ActivityType.listening, name=current_track)
-        )
+async def sync_activity_from_target(guild=None):
+    """Clones the status and activity text of the specified Target User ID."""
+    member = None
+    if guild:
+        member = guild.get_member(TARGET_USER_ID)
+    else:
+        for g in bot.guilds:
+            member = g.get_member(TARGET_USER_ID)
+            if member:
+                break
+
+    if member and member.status != discord.Status.offline:
+        target_activity = member.activity if member.activity else None
+        await bot.change_presence(status=discord.Status.dnd, activity=target_activity)
     else:
         await bot.change_presence(status=discord.Status.dnd, activity=None)
 
+async def update_bot_status(guild):
+    """Dynamically sets status based on music playback, falling back to cloned presence."""
+    if guild.voice_client and guild.voice_client.is_playing() and queue:
+        current_track = queue[0]
+        track_title = current_track.get('title', 'Unknown Track')
+        await bot.change_presence(
+            status=discord.Status.dnd,
+            activity=discord.Activity(type=discord.ActivityType.listening, name=track_title)
+        )
+    else:
+        await sync_activity_from_target(guild)
+
 def play_next(ctx):
-    """Funkcja wywoływana po zakończeniu odtwarzania utworu."""
-    if len(queue) > 0:
-        url = queue.pop(0)
-        titles_queue.pop(0)
+    """Handles the automatic transition to the next track in the queue."""
+    if len(queue) > 1:
+        queue.pop(0)  # Remove the finished track
+        next_track = queue[0]
         
         ctx.voice_client.play(
-            discord.FFmpegPCMAudio(url, **FFMPEG_OPTIONS), 
+            discord.FFmpegPCMAudio(next_track['url'], **FFMPEG_OPTIONS), 
             after=lambda e: play_next(ctx)
         )
-        # Aktualizacja statusu (uruchamiana w pętli bota)
-        bot.loop.create_task(update_status(ctx.guild))
+        
+        # Now Playing announcement embed with artwork
+        embed = discord.Embed(
+            title="Now Playing", 
+            description=f"**{next_track['title']}**", 
+            color=0xff5500
+        )
+        if next_track['thumbnail']:
+            embed.set_thumbnail(url=next_track['thumbnail'])
+        embed.set_footer(text="Streaming from SoundCloud")
+        
+        bot.loop.create_task(ctx.send(embed=embed))
+        bot.loop.create_task(update_bot_status(ctx.guild))
     else:
-        bot.loop.create_task(update_status(ctx.guild))
+        if queue:
+            queue.pop(0)
+        bot.loop.create_task(update_bot_status(ctx.guild))
 
 @bot.event
 async def on_ready():
-    print(f'Zalogowano jako {bot.user.name}')
-    await bot.change_presence(status=discord.Status.dnd)
+    print(f'Logged in successfully as {bot.user.name}')
+    await sync_activity_from_target()
+
+@bot.event
+async def on_presence_update(before, after):
+    """Listens for live status updates of the targeted user ID and copies them."""
+    if after.id == TARGET_USER_ID:
+        for guild in bot.guilds:
+            vc = guild.voice_client
+            if vc and vc.is_playing():
+                return  # Music status takes priority if playing
+        await sync_activity_from_target(after.guild)
 
 @bot.event
 async def on_voice_state_update(member, before, after):
-    """Automatyczne wychodzenie, gdy bot zostanie sam na kanale."""
+    """Automatically disconnects and clears data when the bot is left alone."""
     voice_client = member.guild.voice_client
     if voice_client and voice_client.channel:
-        # Liczymy tylko prawdziwych użytkowników (bez botów)
         non_bot_members = [m for m in voice_client.channel.members if not m.bot]
         if len(non_bot_members) == 0:
-            # Czyszczenie kolejek przy wyjściu
             queue.clear()
-            titles_queue.clear()
             await voice_client.disconnect()
-            await bot.change_presence(status=discord.Status.dnd, activity=None)
+            await sync_activity_from_target(member.guild)
+
+# --- MUSIC BOT COMMANDS ---
 
 @bot.command(name='play')
-async def play(ctx, *, search: str):
-    """Odtwarza utwór z SoundCloud na podstawie linku lub wyszukiwania."""
+async def play(ctx, *, search: str = None):
+    """Plays audio from SoundCloud or adds it to the queue with artwork support."""
+    if not search:
+        embed = discord.Embed(description="❌ Please provide a song name or a SoundCloud link!", color=0xff0000)
+        return await ctx.send(embed=embed)
+
     if not ctx.author.voice:
-        return await ctx.send("Musisz być na kanale głosowym!")
+        embed = discord.Embed(description="❌ You must join a voice channel first before using this command!", color=0xff0000)
+        return await ctx.send(embed=embed)
 
     if not ctx.voice_client:
         await ctx.author.voice.channel.connect()
 
     async with ctx.typing():
         try:
-            # Pobranie info z SoundCloud przez yt_dlp
             info = ytdl.extract_info(search, download=False)
             if 'entries' in info:
                 info = info['entries'][0]
             
-            url = info['url']
-            title = info.get('title', 'Nieznany utwór')
+            # Extract artwork or fall back to user avatar if thumbnail is unavailable
+            artwork = info.get('thumbnail') or info.get('uploader_avatar')
+            
+            track_data = {
+                'url': info['url'],
+                'original_url': info.get('webpage_url', search),
+                'title': info.get('title', 'Unknown Track'),
+                'thumbnail': artwork,
+                'duration': info.get('duration', 0)
+            }
         except Exception as e:
-            return await ctx.send(f"Błąd podczas szukania na SoundCloud: {e}")
+            embed = discord.Embed(description=f"❌ Error extracting data from SoundCloud: {e}", color=0xff0000)
+            return await ctx.send(embed=embed)
+
+    queue.append(track_data)
 
     if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
-        queue.append(url)
-        titles_queue.append(title)
-        await ctx.send(f"Dodano do kolejki: **{title}**")
+        embed = discord.Embed(
+            title="Added to Queue", 
+            description=f"**{track_data['title']}**", 
+            color=0x00ff00
+        )
+        if track_data['thumbnail']:
+            embed.set_thumbnail(url=track_data['thumbnail'])
+        embed.set_footer(text="Positioned safely in the queue.")
+        await ctx.send(embed=embed)
     else:
-        queue.append(url)
-        titles_queue.append(title)
-        play_next(ctx)
-        await ctx.send(f"Teraz gram: **{title}**")
+        ctx.voice_client.play(
+            discord.FFmpegPCMAudio(track_data['url'], **FFMPEG_OPTIONS), 
+            after=lambda e: play_next(ctx)
+        )
+        embed = discord.Embed(
+            title="Now Playing", 
+            description=f"**{track_data['title']}**", 
+            color=0xff5500
+        )
+        if track_data['thumbnail']:
+            embed.set_thumbnail(url=track_data['thumbnail'])
+        embed.set_footer(text="Streaming from SoundCloud")
+        
+        await ctx.send(embed=embed)
+        await update_bot_status(ctx.guild)
 
 @bot.command(name='skip')
 async def skip(ctx):
-    """Pomija obecny utwór."""
-    if ctx.voice_client and ctx.voice_client.is_playing():
-        ctx.voice_client.stop()
-        await ctx.send("Utwór pominięty ⏭️")
-    else:
-        await ctx.send("Nic teraz nie leci.")
+    """Skips the currently playing soundtrack."""
+    if not ctx.voice_client or not ctx.voice_client.is_playing():
+        embed = discord.Embed(description="❌ There is no music track currently playing to skip.", color=0xff0000)
+        return await ctx.send(embed=embed)
+        
+    ctx.voice_client.stop()
+    embed = discord.Embed(description="⏭️ Current track skipped successfully.", color=0xffff00)
+    await ctx.send(embed=embed)
 
 @bot.command(name='clear')
 async def clear(ctx):
-    """Czyści kolejkę i rozłącza bota z kanału."""
+    """Clears the whole queue system and disconnects from the channel."""
     queue.clear()
-    titles_queue.clear()
     if ctx.voice_client:
         await ctx.voice_client.disconnect()
-        await ctx.send("Kolejka wyczyszczona. Bot rozłączony ⏹️")
+        embed = discord.Embed(description="⏹️ Queue flushed. Cleaned up and disconnected from the voice channel.", color=0xff0000)
+        await ctx.send(embed=embed)
     else:
-        await ctx.send("Bot nie jest połączony z żadnym kanałem.")
-    await bot.change_presence(status=discord.Status.dnd, activity=None)
+        embed = discord.Embed(description="❌ The bot is not connected to any voice channel active.", color=0xff0000)
+        await ctx.send(embed=embed)
+    await sync_activity_from_target(ctx.guild)
 
-# Uruchomienie serwera HTTP w tle
+@bot.command(name='help')
+async def help_command(ctx):
+    """Displays an elegant custom dashboard with all operational controls."""
+    embed = discord.Embed(
+        title="🎵 Professional Music Bot Controls", 
+        description="Stream top tier sound directly from SoundCloud seamlessly.", 
+        color=0x7289da
+    )
+    embed.add_field(name="`!play <search/URL>`", value="Plays a specific track from SoundCloud or queues it up.", inline=False)
+    embed.add_field(name="`!skip`", value="Skips the current music track instantly.", inline=False)
+    embed.add_field(name="`!clear`", value="Clears the entire audio queue and forces a voice disconnect.", inline=False)
+    embed.add_field(name="`!help`", value="Brings up this technical overview panel.", inline=False)
+    embed.set_footer(text="Maintained and fully optimized via Render cloud hosting.")
+    await ctx.send(embed=embed)
+
+# Start webserver thread for maintaining Render deployment health checks
 Thread(target=run_web).start()
 
-# Uruchomienie bota za pomocą zmiennej środowiskowej DISCORD_TOKEN
+# Launch client with the designated secret token
 bot.run(os.environ.get("DISCORD_TOKEN"))
