@@ -221,4 +221,3 @@ async def help_command(ctx):
 
 Thread(target=run_web).start()
 bot.run(os.environ.get("DISCORD_TOKEN"))
-        
