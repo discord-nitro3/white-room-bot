@@ -10,12 +10,9 @@ import yt_dlp
 # --- AUTOMATYCZNY, STABILNY POZYSKIWACZ FFMPEG ---
 try:
     import ffdl
-    # Sprawdza czy ffmpeg jest już pobrany, jeśli nie – pobiera go dyskretnie
     if not os.path.exists("ffmpeg") and not os.path.exists("ffmpeg.exe"):
         print("Pobieranie stabilnego FFmpeg dla bezpiecznego streamingu...")
-        ffdl.main(["-n"]) # Pobiera binarkę bez interakcji z użytkownikiem
-    
-    # Ustalenie dokładnej ścieżki do pobranego pliku
+        ffdl.main(["-n"])
     FFMPEG_EXE = "./ffmpeg" if os.name != "nt" else "ffmpeg.exe"
     print(f"Sukces! FFmpeg przygotowany pod ścieżką: {FFMPEG_EXE}")
 except Exception as e:
@@ -48,9 +45,11 @@ YTDL_OPTIONS = {
     'quiet': True,
     'default_search': 'scsearch',
 }
+
+# PODBICIĘ GŁOŚNOŚCI (volume=1.5 oznacza 150% głośności bazowej, bez przesteru)
 FFMPEG_OPTIONS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-    'options': '-vn',
+    'options': '-vn -filter:a "volume=1.5"',
 }
 
 ytdl = yt_dlp.YoutubeDL(YTDL_OPTIONS)
@@ -199,6 +198,35 @@ async def skip(ctx):
     embed = discord.Embed(description="⏭️ Current track skipped successfully.", color=0xffff00)
     await ctx.send(embed=embed)
 
+@bot.command(name='pause')
+async def pause(ctx):
+    if ctx.voice_client and ctx.voice_client.is_playing():
+        ctx.voice_client.pause()
+        await ctx.send(embed=discord.Embed(description="⏸️ Music paused.", color=0xffff00))
+    else:
+        await ctx.send(embed=discord.Embed(description="❌ Nothing is playing right now.", color=0xff0000))
+
+@bot.command(name='resume')
+async def resume(ctx):
+    if ctx.voice_client and ctx.voice_client.is_paused():
+        ctx.voice_client.resume()
+        await ctx.send(embed=discord.Embed(description="▶️ Music resumed.", color=0x00ff00))
+    else:
+        await ctx.send(embed=discord.Embed(description="❌ Music is not paused.", color=0xff0000))
+
+@bot.command(name='queue')
+async def view_queue(ctx):
+    if not queue:
+        return await ctx.send(embed=discord.Embed(description="📁 The queue is currently empty.", color=0x7289da))
+    
+    description = ""
+    for i, track in enumerate(queue):
+        prefix = "🔥 Now Playing:" if i == 0 else f"`{i}`."
+        description += f"{prefix} **{track['title']}**\n"
+        
+    embed = discord.Embed(title="🎵 Current Audio Queue", description=description, color=0x7289da)
+    await ctx.send(embed=embed)
+
 @bot.command(name='clear')
 async def clear(ctx):
     queue.clear()
@@ -216,11 +244,13 @@ async def clear(ctx):
 @bot.command(name='help')
 async def help_command(ctx):
     embed = discord.Embed(title="🎵 Professional Music Bot Controls", description="Stream top tier sound directly from SoundCloud seamlessly.", color=0x7289da)
-    embed.add_field(name="`!play <search/URL>`", value="Plays a specific track from SoundCloud or queues it up.", inline=False)
-    embed.add_field(name="`!skip`", value="Skips the current music track instantly.", inline=False)
-    embed.add_field(name="`!clear`", value="Clears the entire audio queue and forces a voice disconnect.", inline=False)
-    embed.add_field(name="`!help`", value="Brings up this technical overview panel.", inline=False)
-    embed.set_footer(text="Maintained and fully optimized via Render cloud hosting.")
+    embed.add_field(name="`!play <wyszukiwanie/URL>`", value="Odtwarza utwór ze SoundCloud lub dodaje do kolejki.", inline=False)
+    embed.add_field(name="`!skip`", value="Pomiń aktualnie grany utwór.", inline=False)
+    embed.add_field(name="`!pause`", value="Zatrzymaj odtwarzanie muzyki.", inline=True)
+    embed.add_field(name="`!resume`", value="Wznów zatrzymaną muzykę.", inline=True)
+    embed.add_field(name="`!queue`", value="Zobacz listę nadchodzących utworów.", inline=False)
+    embed.add_field(name="`!clear`", value="Wyczyść kolejkę i wyjdź z kanału.", inline=False)
+    embed.set_footer(text="Podbicie głośności (150%) włączone na stałe.")
     await ctx.send(embed=embed)
 
 Thread(target=run_web).start()
