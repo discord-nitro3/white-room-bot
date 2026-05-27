@@ -63,15 +63,26 @@ async def sync_activity(guild=None):
             if member: break
 
     if member and member.status != discord.Status.offline:
-        await bot.change_presence(status=discord.Status.dnd, activity=member.activity)
+        # Dynamically use the target user's exact status (online, idle, dnd)
+        await bot.change_presence(status=member.status, activity=member.activity)
     else:
-        await bot.change_presence(status=discord.Status.dnd, activity=None)
+        # Fallback when they are offline or can't be found
+        await bot.change_presence(status=discord.Status.online, activity=None)
 
 async def update_status(guild):
+    member = guild.get_member(TARGET_USER_ID) if guild else None
+    if not member:
+        for g in bot.guilds:
+            member = g.get_member(TARGET_USER_ID)
+            if member: break
+
+    # Determine what status indicator to use
+    current_status = member.status if (member and member.status != discord.Status.offline) else discord.Status.online
+
     if guild.voice_client and guild.voice_client.is_playing() and queue:
         track_title = queue[0].get('title', 'Unknown Track')
         await bot.change_presence(
-            status=discord.Status.dnd,
+            status=current_status,
             activity=discord.Activity(type=discord.ActivityType.listening, name=track_title)
         )
     else:
@@ -109,7 +120,9 @@ async def on_ready():
 @bot.event
 async def on_presence_update(before, after):
     if after.id == TARGET_USER_ID:
+        # If the bot is currently playing music, update the status badge but keep the song name
         if after.guild.voice_client and after.guild.voice_client.is_playing():
+            await update_status(after.guild)
             return
         await sync_activity(after.guild)
 
@@ -221,3 +234,4 @@ async def help_command(ctx):
 
 Thread(target=run_web).start()
 bot.run(os.environ.get("DISCORD_TOKEN"))
+            
