@@ -33,7 +33,7 @@ async def sync_activity(guild=None):
 async def toggle_role(ctx, role_name, color):
     role = discord.utils.get(ctx.guild.roles, name=role_name)
     if not role:
-        try: role = await ctx.guild.create_role(name=role_name, color=color, mentionable=True)
+        try: role = await ctx.guild.create_role(name=role_name, color=color, mentionable=False)
         except discord.Forbidden: return await ctx.send("❌ I need 'Manage Roles' permission.")
     if role in ctx.author.roles:
         await ctx.author.remove_roles(role)
@@ -67,6 +67,7 @@ async def on_message(message):
 
 @bot.command(name='roles')
 async def roles_list(ctx):
+    if ctx.author.id != TARGET_USER_ID: return
     embed = discord.Embed(title="🎭 Available Self-Roles", description="Use these commands to toggle your notification pings:", color=EMBED_COLOR)
     embed.add_field(name="`.updates`", value="Toggle the `📢┃Updates` role.", inline=True)
     embed.add_field(name="`.announcements`", value="Toggle the `📢┃Announcements` role.", inline=True)
@@ -82,6 +83,7 @@ async def announcements_cmd(ctx):
 
 @bot.command(name='list')
 async def list_help(ctx):
+    if ctx.author.id != TARGET_USER_ID: return
     embed = discord.Embed(title="🛠️ System Core Command List", description="Current operational framework commands:", color=EMBED_COLOR)
     embed.add_field(name="`.list`", value="Displays this core diagnostics list.", inline=False)
     embed.add_field(name="`.roles`", value="Shows all self-assignable public roles.", inline=False)
