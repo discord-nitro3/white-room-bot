@@ -1,5 +1,6 @@
 import os
 import json
+import asyncio
 from flask import Flask
 from threading import Thread
 import discord
@@ -12,7 +13,9 @@ def run_web(): app.run(host='0.0.0.0', port=10000)
 
 TARGET_USER_ID = 1143856525648076812
 LOG_CHANNEL_ID = 1515049160561135747
+ROLES_CHANNEL_ID = 1515064020573487135
 DATA_FILE = "autorole.json"
+
 intents = discord.Intents.default()
 intents.message_content = True
 intents.presences = True
@@ -46,16 +49,26 @@ async def sync_activity(guild=None):
         await bot.change_presence(status=discord.Status.online, activity=None)
 
 async def toggle_role(ctx, role_name, color):
+    # Automatyczne czyszczenie triggera (komendy użytkownika)
+    try: await ctx.message.delete()
+    except discord.Forbidden: pass
+
     role = discord.utils.get(ctx.guild.roles, name=role_name)
     if not role:
         try: role = await ctx.guild.create_role(name=role_name, color=color, mentionable=False)
-        except discord.Forbidden: return await ctx.send("❌ I need 'Manage Roles' permission.")
+        except discord.Forbidden: 
+            msg = await ctx.send("❌ I need 'Manage Roles' permission.")
+            return await asyncio.sleep(5) or await msg.delete()
+
     if role in ctx.author.roles:
         await ctx.author.remove_roles(role)
-        await ctx.send(embed=discord.Embed(description=f"✨ Removed {role.mention} role.", color=EMBED_COLOR))
+        embed = discord.Embed(description=f"✨ {ctx.author.mention}, removed {role.mention} role.", color=EMBED_COLOR)
     else:
         await ctx.author.add_roles(role)
-        await ctx.send(embed=discord.Embed(description=f"✨ Assigned {role.mention} role.", color=EMBED_COLOR))
+        embed = discord.Embed(description=f"✨ {ctx.author.mention}, assigned {role.mention} role.", color=EMBED_COLOR)
+    
+    # Wysyłanie i automatyczne kasowanie odpowiedzi po 5 sekundach
+    await ctx.send(embed=embed, delete_after=5)
 
 @bot.event
 async def on_ready():
@@ -99,10 +112,14 @@ async def roles_list(ctx):
 
 @bot.command(name='updates')
 async def updates_cmd(ctx):
+    if ctx.channel.id != ROLES_CHANNEL_ID and ctx.author.id != TARGET_USER_ID:
+        return await ctx.send(f"❌ You can only use this command in <#{ROLES_CHANNEL_ID}>", delete_after=5)
     await toggle_role(ctx, "📢┃Updates", discord.Color.blue())
 
 @bot.command(name='news')
 async def news_cmd(ctx):
+    if ctx.channel.id != ROLES_CHANNEL_ID and ctx.author.id != TARGET_USER_ID:
+        return await ctx.send(f"❌ You can only use this command in <#{ROLES_CHANNEL_ID}>", delete_after=5)
     await toggle_role(ctx, "📢┃News", discord.Color.gold())
 
 @bot.group(name="autorole", invoke_without_command=True)
@@ -143,4 +160,3 @@ async def list_help(ctx):
 
 Thread(target=run_web).start()
 bot.run(os.environ.get("DISCORD_TOKEN"))
-    
