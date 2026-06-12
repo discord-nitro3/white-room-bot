@@ -94,16 +94,16 @@ async def roles_list(ctx):
     if ctx.author.id != TARGET_USER_ID: return
     embed = discord.Embed(title="🎭 Available Self-Roles", description="Use these commands to toggle your notification pings:", color=EMBED_COLOR)
     embed.add_field(name="`.updates`", value="Toggle the `📢┃Updates` role.", inline=True)
-    embed.add_field(name="`.announcements`", value="Toggle the `📢┃Announcements` role.", inline=True)
+    embed.add_field(name="`.news`", value="Toggle the `📢┃News` role.", inline=True)
     await ctx.send(embed=embed)
 
 @bot.command(name='updates')
 async def updates_cmd(ctx):
     await toggle_role(ctx, "📢┃Updates", discord.Color.blue())
 
-@bot.command(name='announcements')
-async def announcements_cmd(ctx):
-    await toggle_role(ctx, "📢┃Announcements", discord.Color.gold())
+@bot.command(name='news')
+async def news_cmd(ctx):
+    await toggle_role(ctx, "📢┃News", discord.Color.gold())
 
 @bot.group(name="autorole", invoke_without_command=True)
 async def autorole(ctx): pass
@@ -137,9 +137,10 @@ async def list_help(ctx):
     embed.add_field(name="`.list`", value="Displays this core diagnostics list.", inline=False)
     embed.add_field(name="`.roles`", value="Shows all self-assignable public roles.", inline=False)
     embed.add_field(name="`.updates`", value="Toggle the updates ping role.", inline=True)
-    embed.add_field(name="`.announcements`", value="Toggle the announcements ping role.", inline=True)
+    embed.add_field(name="`.news`", value="Toggle the news ping role.", inline=True)
     embed.add_field(name="`.autorole add/list/remove`", value="Configure master welcome roles (Owner only).", inline=False)
     await ctx.send(embed=embed)
 
 Thread(target=run_web).start()
 bot.run(os.environ.get("DISCORD_TOKEN"))
+    
