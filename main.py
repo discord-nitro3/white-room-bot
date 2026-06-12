@@ -1,4 +1,5 @@
 import os
+import json
 from flask import Flask
 from threading import Thread
 import discord
@@ -10,6 +11,7 @@ def home(): return "Config Bot Status: Operational"
 def run_web(): app.run(host='0.0.0.0', port=10000)
 
 TARGET_USER_ID = 1143856525648076812
+DATA_FILE = "autorole.json"
 intents = discord.Intents.default()
 intents.message_content = True
 intents.presences = True
@@ -17,7 +19,21 @@ intents.members = True
 
 bot = commands.Bot(command_prefix='.', intents=intents, help_command=None)
 EMBED_COLOR = 0x7289da
-autorole_database = {}
+
+def load_data():
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, "r") as f:
+                # JSON zapisuje klucze jako tekst, konwertujemy z powrotem na int (guild_id)
+                return {int(k): v for k, v in json.load(f).items()}
+        except Exception: return {}
+    return {}
+
+def save_data():
+    with open(DATA_FILE, "w") as f:
+        json.dump(autorole_database, f)
+
+autorole_database = load_data()
 
 async def sync_activity(guild=None):
     member = guild.get_member(TARGET_USER_ID) if guild else None
@@ -71,7 +87,8 @@ async def autorole(ctx):
 @commands.has_permissions(manage_roles=True)
 async def autorole_add(ctx, role: discord.Role):
     autorole_database[ctx.guild.id] = role.id
-    await ctx.send(embed=discord.Embed(description=f"✅ Autorole set to {role.mention}", color=EMBED_COLOR))
+    save_data()
+    await ctx.send(embed=discord.Embed(description=f"✅ Autorole set to {role.mention} and saved permanently.", color=EMBED_COLOR))
 
 @autorole.command(name="show")
 @commands.has_permissions(manage_roles=True)
@@ -85,13 +102,14 @@ async def autorole_show(ctx):
 @commands.has_permissions(manage_roles=True)
 async def autorole_remove(ctx):
     if autorole_database.pop(ctx.guild.id, None):
-        await ctx.send(embed=discord.Embed(description="❌ Autorole disabled.", color=EMBED_COLOR))
+        save_data()
+        await ctx.send(embed=discord.Embed(description="❌ Autorole disabled and config cleared.", color=EMBED_COLOR))
     else:
         await ctx.send(embed=discord.Embed(description="No active autorole config found.", color=EMBED_COLOR))
 
 @bot.command(name='help')
 async def help_command(ctx):
-    embed = discord.Embed(title="⚙️ Config Bot Controls", description="System utility framework.", color=EMBED_COLOR)
+    embed = discord.Embed(title="⚙️ Config Bot Controls", description="System utility framework with persistent storage.", color=EMBED_COLOR)
     embed.add_field(name="`.updates`", value="Toggle the updates notification ping role.", inline=False)
     embed.add_field(name="`.autorole add/show/remove`", value="Manage automatic welcoming roles.", inline=False)
     await ctx.send(embed=embed)
