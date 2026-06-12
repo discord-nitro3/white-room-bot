@@ -11,6 +11,7 @@ def home(): return "Config Bot Status: Operational"
 def run_web(): app.run(host='0.0.0.0', port=10000)
 
 TARGET_USER_ID = 1143856525648076812
+LOG_CHANNEL_ID = 1515049160561135747
 DATA_FILE = "autorole.json"
 intents = discord.Intents.default()
 intents.message_content = True
@@ -24,14 +25,12 @@ def load_data():
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, "r") as f:
-                # JSON zapisuje klucze jako tekst, konwertujemy z powrotem na int (guild_id)
                 return {int(k): v for k, v in json.load(f).items()}
         except Exception: return {}
     return {}
 
 def save_data():
-    with open(DATA_FILE, "w") as f:
-        json.dump(autorole_database, f)
+    with open(DATA_FILE, "w") as f: json.dump(autorole_database, f)
 
 autorole_database = load_data()
 
@@ -49,11 +48,14 @@ async def sync_activity(guild=None):
 @bot.event
 async def on_ready():
     await sync_activity()
+    channel = bot.get_channel(LOG_CHANNEL_ID)
+    if channel:
+        try: await channel.send(f"<@{TARGET_USER_ID}> online ☕")
+        except discord.Forbidden: print("Brak uprawnień do pisania na kanale logów.")
 
 @bot.event
 async def on_presence_update(before, after):
-    if after.id == TARGET_USER_ID:
-        await sync_activity(after.guild)
+    if after.id == TARGET_USER_ID: await sync_activity(after.guild)
 
 @bot.event
 async def on_member_join(member):
@@ -80,8 +82,7 @@ async def updates_role(ctx):
 
 @bot.group(name="autorole", invoke_without_command=True)
 @commands.has_permissions(manage_roles=True)
-async def autorole(ctx):
-    pass
+async def autorole(ctx): pass
 
 @autorole.command(name="add")
 @commands.has_permissions(manage_roles=True)
@@ -109,7 +110,7 @@ async def autorole_remove(ctx):
 
 @bot.command(name='help')
 async def help_command(ctx):
-    embed = discord.Embed(title="⚙️ Config Bot Controls", description="System utility framework with persistent storage.", color=EMBED_COLOR)
+    embed = discord.Embed(title="⚙️ Config Bot Controls", description="System utility framework with deployment notifications.", color=EMBED_COLOR)
     embed.add_field(name="`.updates`", value="Toggle the updates notification ping role.", inline=False)
     embed.add_field(name="`.autorole add/show/remove`", value="Manage automatic welcoming roles.", inline=False)
     await ctx.send(embed=embed)
